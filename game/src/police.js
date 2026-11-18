@@ -1,197 +1,166 @@
-// The Serena Police Department: wanted heat, patrol cars that pursue, officers who chase
-// on foot and arrest, and the helicopter that joins at three stars. Police read the same
-// city the player drives: cars spawn on roads at the edge of sight, steer by pursuit, and
-// officers spill out of them when the player is on foot. More stars mean more cars, faster
-// cars and a shorter temper — and heat only cools while no uniform can see the player.
-// Recorded-session note: pursuit steering slides along buildings axis-by-axis instead of
-// bouncing, so a chase through the Old Town grid stays a chase and never a traffic jam.
+// police.js — the Serena Police Department (SPD).
+// Heat is the raw score; stars are derived from it. Units scale with stars,
+// the helicopter joins at 3 stars, and heat only bleeds off while no unit
+// can see Rio — hiding actually works, sprinting down Ocean Drive doesn't.
 
-import { VEHICLE, WANTED, WORLD } from './config.js';
-import { nearestRoadPoint, circleHitsBuilding } from './world.js';
+import { CFG, WANTED_LEVELS, HEAT } from './config.js';
+import { clamp, dist, angleLerp } from './random.js';
+import { makeVehicle, makePed, moveCar } from './entities.js';
+import { world } from './world.js';
 
-const POLICE_MODEL = { name: 'SPD Interceptor', color: '#274690', maxSpeed: 470, kind: 'car' };
-
-function spawnPoliceCar(state, random) {
-  const focus = state.player.vehicle
-    ? { x: state.player.vehicle.x, y: state.player.vehicle.y }
-    : { x: state.player.x, y: state.player.y };
-  const angle = random() * Math.PI * 2;
-  const rawX = Math.max(80, Math.min(WORLD.width - 80, focus.x + Math.cos(angle) * 780));
-  const rawY = Math.max(80, Math.min(WORLD.beachY - 60, focus.y + Math.sin(angle) * 780));
-  const road = nearestRoadPoint(rawX, rawY);
-  return {
-    x: road.x, y: road.y,
-    angle: Math.atan2(focus.y - road.y, focus.x - road.x),
-    speed: 0, model: POLICE_MODEL, color: POLICE_MODEL.color, kind: 'car',
-    driver: 'police', health: 100, honkTimer: 0, axis: 'x', direction: 1, cruise: 0,
-    sirenPhase: random() * Math.PI * 2, officerOut: false, stuckTimer: 0,
-  };
+export function starsFromHeat(heat) {
+  if (heat <= 0) return 0;
+  if (heat < 30) return 1;
+  if (heat < 65) return 2;
+  if (heat < 105) return 3;
+  if (heat < 150) return 4;
+  return 5;
 }
 
-function steerVehicleToward(vehicle, target, maxSpeed, dt, buildings) {
-  const dx = target.x - vehicle.x;
-  const dy = target.y - vehicle.y;
-  const distance = Math.hypot(dx, dy);
-  const desired = Math.atan2(dy, dx);
-  let turn = desired - vehicle.angle;
-  while (turn > Math.PI) turn -= Math.PI * 2;
-  while (turn < -Math.PI) turn += Math.PI * 2;
-  vehicle.angle += Math.max(-2.5 * dt, Math.min(2.5 * dt, turn));
-  const targetSpeed = distance > 70 ? maxSpeed : maxSpeed * 0.3;
-  vehicle.speed += Math.max(-430 * dt, Math.min(310 * dt, targetSpeed - vehicle.speed));
-  const nx = vehicle.x + Math.cos(vehicle.angle) * vehicle.speed * dt;
-  const ny = vehicle.y + Math.sin(vehicle.angle) * vehicle.speed * dt;
-  if (!circleHitsBuilding(buildings, nx, ny, VEHICLE.radius)) {
-    vehicle.x = nx;
-    vehicle.y = ny;
-    vehicle.stuckTimer = 0;
-  } else if (!circleHitsBuilding(buildings, nx, vehicle.y, VEHICLE.radius)) {
-    vehicle.x = nx;
-    vehicle.speed *= 0.55;
-  } else if (!circleHitsBuilding(buildings, vehicle.x, ny, VEHICLE.radius)) {
-    vehicle.y = ny;
-    vehicle.speed *= 0.55;
-  } else {
-    vehicle.speed *= -0.3;
-    vehicle.stuckTimer += dt;
-  }
-  vehicle.x = Math.max(40, Math.min(WORLD.width - 40, vehicle.x));
-  vehicle.y = Math.max(40, Math.min(WORLD.waterY - 24, vehicle.y));
-  return distance;
-}
-
-export function createPoliceSystem(game, city, random) {
-  const { state } = game;
-
-  function desiredPoliceCars() {
-    return state.wanted === 0 ? 0 : state.wanted + 1;
+export class Police {
+  constructor(rng) {
+    this.rng = rng;
+    this.heat = 0;
+    this.cars = [];     // police vehicles (also mirrored into game.vehicles)
+    this.officers = []; // foot officers (mirrored into game.peds)
+    this.heli = { active: false, x: 0, y: 0, angle: 0, sweep: 0, rotor: 0 };
+    this.seenTimer = 0; // seconds since any unit last saw the player
+    this.spawnCooldown = 0;
   }
 
-  function anyPoliceNear(radius) {
-    const focus = game.playerPosition();
-    if (state.helicopter) return true;
-    for (const car of state.policeCars) {
-      if (Math.hypot(car.x - focus.x, car.y - focus.y) < radius) return true;
-    }
-    for (const officer of state.officers) {
-      if (Math.hypot(officer.x - focus.x, officer.y - focus.y) < radius) return true;
-    }
-    return false;
+  get wanted() { return starsFromHeat(this.heat); }
+
+  addHeat(points) {
+    this.heat = clamp(this.heat + points, 0, 220);
   }
 
-  function spawnOfficer(car) {
-    state.officers.push({
-      x: car.x + 30, y: car.y + 16, angle: 0, speed: 196,
-      color: '#274690', state: 'chase', stateTimer: 0,
-      targetX: car.x, targetY: car.y, fallTimer: 0, hitCooldown: 0, car,
-    });
-    car.officerOut = true;
+  clear() {
+    this.heat = 0;
+    this.seenTimer = 99;
   }
 
-  function stepPolice(dt) {
-    // Heat cools only while nobody in uniform can see the player.
-    state.heatTimer += dt;
-    if (state.wanted > 0 && state.heatTimer > 4 && !anyPoliceNear(430)) {
-      state.hiddenTimer += dt;
-      if (state.hiddenTimer >= WANTED.decaySeconds) {
-        state.wanted -= 1;
-        state.hiddenTimer = 0;
-        state.heatTimer = 0;
-        state.message = state.wanted === 0 ? 'You lost the cops — heat cleared' : 'Heat is cooling — stay out of sight';
-        state.messageTimer = 2.4;
-        game.emit('clear');
-      }
-    } else {
-      state.hiddenTimer = 0;
+  // Spawn a unit just off-screen near the player so pursuit feels responsive
+  // without cars popping into view.
+  spawnCar(game) {
+    const p = game.player;
+    const a = this.rng.range(0, Math.PI * 2);
+    const d = 560;
+    const x = clamp(p.x + Math.cos(a) * d, 40, CFG.worldW - 40);
+    const y = clamp(p.y + Math.sin(a) * d, 40, CFG.worldH - 40);
+    // Snap to the nearest road so cruisers arrive on tarmac.
+    let bx = x, by = y, bd = Infinity;
+    for (const pt of world.intersections) {
+      const dd = dist(x, y, pt.x, pt.y);
+      if (dd < bd) { bd = dd; bx = pt.x; by = pt.y; }
+    }
+    const car = makeVehicle('cruiser', bx, by, Math.atan2(p.y - by, p.x - bx), 'police');
+    this.cars.push(car);
+    game.vehicles.push(car);
+    return car;
+  }
+
+  spawnOfficer(game) {
+    const p = game.player;
+    const a = this.rng.range(0, Math.PI * 2);
+    const off = makePed(clamp(p.x + Math.cos(a) * 380, 30, CFG.worldW - 30), clamp(p.y + Math.sin(a) * 380, 30, CFG.worldH - 30), this.rng, 'officer');
+    off.color = '#274690';
+    this.officers.push(off);
+    game.peds.push(off);
+    return off;
+  }
+
+  update(dt, game) {
+    const p = game.player;
+    const level = WANTED_LEVELS[this.wanted];
+    this.spawnCooldown -= dt;
+
+    // Maintain unit counts for the current star level.
+    if (this.wanted > 0 && this.spawnCooldown <= 0) {
+      if (this.cars.length < level.cars) { this.spawnCar(game); this.spawnCooldown = 0.7; }
+      else if (this.officers.length < level.foot) { this.spawnOfficer(game); this.spawnCooldown = 0.7; }
+    }
+    // Despawn far-away excess units when heat drops.
+    if (this.cars.length > level.cars) {
+      const far = this.cars.find((c) => dist(c.x, c.y, p.x, p.y) > 800);
+      if (far) this.removeCar(game, far);
+    }
+    if (this.officers.length > level.foot) {
+      const far = this.officers.find((o) => dist(o.x, o.y, p.x, p.y) > 700);
+      if (far) this.removeOfficer(game, far);
     }
 
-    // Keep the pursuit at the size the wanted level calls for.
-    const wanted = desiredPoliceCars();
-    while (state.policeCars.length < wanted) {
-      const car = spawnPoliceCar(state, random);
-      state.policeCars.push(car);
-      state.vehicles.push(car);
-    }
-    if (state.wanted === 0 && state.policeCars.length > 0) {
-      for (const car of state.policeCars) {
-        const index = state.vehicles.indexOf(car);
-        if (index >= 0) state.vehicles.splice(index, 1);
-      }
-      state.policeCars = [];
-      state.officers = [];
+    // Vision: any unit (or the helicopter) within range refreshes "seen".
+    let seen = false;
+    for (const c of this.cars) if (dist(c.x, c.y, p.x, p.y) < 470) seen = true;
+    for (const o of this.officers) if (dist(o.x, o.y, p.x, p.y) < 300) seen = true;
+    if (this.heli.active) seen = true;
+    if (seen) this.seenTimer = 0; else this.seenTimer += dt;
+
+    // Heat decay — only while unseen, and never while a job crime is fresh.
+    if (this.wanted > 0 && this.seenTimer > 2.2) {
+      this.heat = Math.max(0, this.heat - CFG.wantedDecayPerSec * dt);
+      if (this.heat === 0) this.clearUnits(game);
     }
 
-    const focus = game.playerPosition();
-    const pursuitSpeed = 305 + state.wanted * 38;
-    for (const car of state.policeCars) {
-      const distance = steerVehicleToward(car, focus, pursuitSpeed, dt, city.buildings);
-      if (!state.player.vehicle && distance < 120 && !car.officerOut) spawnOfficer(car);
-      if (state.player.vehicle && distance < VEHICLE.radius + 26 && Math.abs(car.speed) > 120 && Math.abs(state.player.vehicle.speed) < 60) {
-        state.shake = Math.max(state.shake, 4);
-        game.emit('crash');
-        car.speed *= 0.4;
+    // Pursuit driving: steer at the player, match the star-level pace.
+    for (const car of this.cars) {
+      const targetAngle = Math.atan2(p.y - car.y, p.x - car.x);
+      car.angle = angleLerp(car.angle, targetAngle, clamp(dt * 2.6, 0, 1));
+      const d = dist(car.x, car.y, p.x, p.y);
+      const want = car.model.top * level.speed * (d > 260 ? 1 : 0.72);
+      car.speed += clamp(want - car.speed, -300 * dt, car.model.accel * dt);
+      if (d < 52) car.speed = Math.min(car.speed, 40); // pull alongside, don't orbit
+      moveCar(car, dt);
+    }
+    // Foot officers run at the player; the arrest logic itself lives in
+    // game.js because it needs the player's full state.
+    for (const off of this.officers) {
+      if (off.state === 'down') continue;
+      const d = dist(off.x, off.y, p.x, p.y);
+      const spd = this.wanted >= 4 ? 205 : 178;
+      off.angle = Math.atan2(p.y - off.y, p.x - off.x);
+      if (d > 26) {
+        off.x += Math.cos(off.angle) * spd * dt;
+        off.y += Math.sin(off.angle) * spd * dt;
+        const fixed = world.collideCircle(off.x, off.y, CFG.playerRadius);
+        off.x = fixed.x; off.y = fixed.y;
       }
-      if (car.stuckTimer > 1.4) {
-        const road = nearestRoadPoint(car.x, car.y);
-        car.x = road.x;
-        car.y = road.y;
-        car.stuckTimer = 0;
-      }
+      off.speed = spd;
     }
 
-    // Officers chase on foot, tackle, and build the arrest.
-    const p = state.player;
-    let arresting = false;
-    for (const officer of state.officers) {
-      if (officer.state === 'down') {
-        officer.fallTimer -= dt;
-        if (officer.fallTimer <= 0) officer.state = 'chase';
-        continue;
-      }
-      const dx = p.x - officer.x;
-      const dy = p.y - officer.y;
-      const distance = Math.hypot(dx, dy);
-      if (!p.vehicle && distance > 4) {
-        officer.x += (dx / distance) * officer.speed * dt;
-        officer.y += (dy / distance) * officer.speed * dt;
-        officer.angle = Math.atan2(dy, dx);
-      }
-      if (!p.vehicle && distance < 30) {
-        arresting = true;
-        officer.hitCooldown -= dt;
-        if (officer.hitCooldown <= 0) {
-          officer.hitCooldown = 0.9;
-          p.health -= 5;
-          game.emit('thud');
-        }
-      }
+    // Helicopter at 3+ stars: hovers offset from the player, searchlight
+    // sweeping — and while it is up, Rio is always "seen".
+    const wantHeli = this.wanted >= 3;
+    if (wantHeli && !this.heli.active) {
+      this.heli.active = true;
+      this.heli.x = p.x - 300; this.heli.y = p.y - 300;
     }
-    if (!p.vehicle && state.wanted > 0 && arresting) {
-      p.arrestMeter += dt / WANTED.arrestSeconds;
-      if (p.arrestMeter >= 1) {
-        p.busted = true;
-        state.screen = 'over';
-        game.emit('busted');
-      }
-    } else {
-      p.arrestMeter = Math.max(0, p.arrestMeter - dt * 0.7);
-    }
-
-    // The helicopter joins at three stars: a circling spotlight that keeps the player lit.
-    if (state.wanted >= WANTED.helicopterStar) {
-      if (!state.helicopter) {
-        state.helicopter = { x: focus.x + 300, y: focus.y - 260, angle: 0, orbit: random() * Math.PI * 2 };
-        game.emit('heli');
-      }
-      const heli = state.helicopter;
-      heli.orbit += dt * 0.55;
-      heli.x += (focus.x + Math.cos(heli.orbit) * 210 - heli.x) * Math.min(1, dt * 1.6);
-      heli.y += (focus.y + Math.sin(heli.orbit) * 150 - heli.y) * Math.min(1, dt * 1.6);
-      heli.angle = Math.atan2(focus.y - heli.y, focus.x - heli.x);
-    } else {
-      state.helicopter = null;
+    if (!wantHeli) this.heli.active = false;
+    if (this.heli.active) {
+      const hx = p.x + Math.cos(this.heli.sweep * 0.6) * 120;
+      const hy = p.y + Math.sin(this.heli.sweep * 0.6) * 120;
+      this.heli.x += (hx - this.heli.x) * clamp(dt * 1.6, 0, 1);
+      this.heli.y += (hy - this.heli.y) * clamp(dt * 1.6, 0, 1);
+      this.heli.sweep += dt;
+      this.heli.rotor += dt * 40;
+      this.heli.angle = Math.atan2(p.y - this.heli.y, p.x - this.heli.x);
     }
   }
 
-  return { stepPolice, anyPoliceNear, desiredPoliceCars };
+  removeCar(game, car) {
+    this.cars = this.cars.filter((c) => c !== car);
+    game.vehicles = game.vehicles.filter((v) => v !== car);
+  }
+  removeOfficer(game, off) {
+    this.officers = this.officers.filter((o) => o !== off);
+    game.peds = game.peds.filter((q) => q !== off);
+  }
+  clearUnits(game) {
+    for (const c of [...this.cars]) this.removeCar(game, c);
+    for (const o of [...this.officers]) this.removeOfficer(game, o);
+    this.heli.active = false;
+  }
+
+  // Crime helpers so call sites read clearly.
+  crime(kind) { if (HEAT[kind]) this.addHeat(HEAT[kind]); }
 }

@@ -1,160 +1,137 @@
-// Port Serena itself: the road grid, the buildings that fill its blocks, the palms, the
-// marina and the collision answers every other system asks. The city is generated once from
-// a seed: the same seed always raises the same streets, so traffic routes, mission markers
-// and staged screenshots all agree about where things stand.
-// The named places below are the city's contract with the mission scripts — every marker a
-// job points at is looked up here by key, never by a hard-coded coordinate elsewhere.
+// world.js — Port Serena city generation.
+// The city is a road grid wrapped around a beach on the east edge. All of it
+// is procedural: no images, no data files, just seeded rectangles and lines.
 
-import { PALETTE, ROADS_X, ROADS_Y, ROAD_HALF, WORLD } from './config.js';
-import { createRandom, pickFrom, rangeFrom } from './random.js';
+import { CFG } from './config.js';
+import { RNG, clamp } from './random.js';
 
-const ROOF_COLORS = [PALETTE.roofA, PALETTE.roofB, PALETTE.roofC, PALETTE.roofD, PALETTE.roofE];
-const BUILDING_NAMES = [
-  'Cafe Solano', 'Hotel Brisa', 'Serena Bank', 'Palm Arcade', 'Marina Market',
-  'Club Nautica', 'Radio Serena', 'Port Authority', 'Solano Motors', 'Bea’s Bakery',
-  'Harbor Clinic', 'Vista Apartments', 'Pier Nine Store', 'Old Town Library',
-  'Sunset Gym', 'Coral Hotel', 'Dockside Diner', 'Palma Mall', 'Serena Records',
-  'Lighthouse Books',
+// Vertical avenues (x centres) and horizontal streets (y centres).
+export const AVENUES = [300, 900, 1500, 2100, 2680];
+export const STREETS = [300, 900, 1500, 2050];
+// Ocean Drive runs along the sand at the far east.
+export const OCEAN_DRIVE_X = 2920;
+export const BEACH_X = 2980; // sand starts here, water past world edge
+
+export const DISTRICTS = [
+  { name: 'Old Town',          x: 0,    y: 0,    w: 1200, h: 1200, tint: '#c9b458' },
+  { name: 'Palm Row',          x: 1200, y: 0,    w: 1200, h: 1200, tint: '#57cc99' },
+  { name: 'University Quarter', x: 2400, y: 0,   w: 800,  h: 1200, tint: '#80ed99' },
+  { name: 'Serena Marina',     x: 0,    y: 1200, w: 1200, h: 1200, tint: '#48cae4' },
+  { name: 'Boardwalk',         x: 1200, y: 1200, w: 1200, h: 1200, tint: '#ffb703' },
+  { name: 'Port Docks',        x: 2400, y: 1200, w: 800,  h: 1200, tint: '#9d8189' },
 ];
 
-/** True when the point stands on a road (either direction), the beach road included. */
-export function isOnRoad(x, y) {
-  for (const rx of ROADS_X) if (Math.abs(x - rx) <= ROAD_HALF) return true;
-  for (const ry of ROADS_Y) if (Math.abs(y - ry) <= ROAD_HALF) return true;
-  if (y >= WORLD.beachY - 40 && y <= WORLD.waterY) return true;
-  return false;
-}
+const BUILDING_NAMES = [
+  'Café Brisa', 'Hotel Palma', 'Serena Records', 'Taller Ocho', 'Banco Serena',
+  'Librería Azul', 'Gym Faro', 'Clínica Harbor', 'Mercado Sol', 'Teatro Brisa',
+  'Oficinas Muelle', 'Bar El Ancla', 'Peluquería Luz', 'Tacos Serena', 'Galería Mar',
+  'Hotel Brisa', 'Radio Serena HQ', 'Taller del Puerto', 'Café Muelle', 'Disco Perla',
+];
+const PALETTE = ['#e9c46a', '#f4a261', '#e76f51', '#a8dadc', '#f1fa8c', '#ffb4a2', '#b5838d', '#90e0ef', '#e5e5e5', '#ffc8dd'];
 
-/** The nearest road centreline point, used to drop traffic and police into the network. */
-export function nearestRoadPoint(x, y) {
-  let best = { x, y, distance: Infinity };
-  for (const rx of ROADS_X) {
-    const distance = Math.abs(x - rx);
-    if (distance < best.distance) best = { x: rx, y, distance };
-  }
-  for (const ry of ROADS_Y) {
-    const distance = Math.abs(y - ry);
-    if (distance < best.distance) best = { x, y: ry, distance };
-  }
-  return best;
-}
-
-/** Push a circle out of every building it overlaps; returns the corrected centre. */
-export function resolveCircleCollisions(buildings, x, y, radius) {
-  let cx = x;
-  let cy = y;
-  for (const b of buildings) {
-    const nearX = Math.max(b.x, Math.min(cx, b.x + b.w));
-    const nearY = Math.max(b.y, Math.min(cy, b.y + b.h));
-    const dx = cx - nearX;
-    const dy = cy - nearY;
-    const distanceSq = dx * dx + dy * dy;
-    if (distanceSq >= radius * radius) continue;
-    if (distanceSq > 0.0001) {
-      const distance = Math.sqrt(distanceSq);
-      cx = nearX + (dx / distance) * radius;
-      cy = nearY + (dy / distance) * radius;
-    } else {
-      // The centre is inside the building: leave by the shallowest side.
-      const left = cx - b.x;
-      const right = b.x + b.w - cx;
-      const top = cy - b.y;
-      const bottom = b.y + b.h - cy;
-      const shallowest = Math.min(left, right, top, bottom);
-      if (shallowest === left) cx = b.x - radius;
-      else if (shallowest === right) cx = b.x + b.w + radius;
-      else if (shallowest === top) cy = b.y - radius;
-      else cy = b.y + b.h + radius;
-    }
-  }
-  return { x: cx, y: cy };
-}
-
-export function circleHitsBuilding(buildings, x, y, radius) {
-  for (const b of buildings) {
-    const nearX = Math.max(b.x, Math.min(x, b.x + b.w));
-    const nearY = Math.max(b.y, Math.min(y, b.y + b.h));
-    const dx = x - nearX;
-    const dy = y - nearY;
-    if (dx * dx + dy * dy < radius * radius) return true;
-  }
-  return false;
-}
-
-/**
- * Build the whole city: building rectangles with names and roof colours, palm positions,
- * the marina piers and the named places missions point at. Pure data — the renderer draws
- * it and the simulation collides with it.
- */
-export function createCity(seed) {
-  const random = createRandom(seed ^ 0x51ab);
+function buildWorld(seed = 7) {
+  const rng = new RNG(seed);
   const buildings = [];
+  const colliders = [];
   const palms = [];
-  let nameIndex = 0;
+  const props = [];
 
-  const edgesX = [80, ...ROADS_X.flatMap((rx) => [rx - ROAD_HALF - 26, rx + ROAD_HALF + 26]), WORLD.width - 80];
-  const edgesY = [80, ...ROADS_Y.flatMap((ry) => [ry - ROAD_HALF - 26, ry + ROAD_HALF + 26]), WORLD.beachY - 30];
-
-  for (let ix = 0; ix + 1 < edgesX.length; ix += 2) {
-    for (let iy = 0; iy + 1 < edgesY.length; iy += 2) {
-      const blockX = edgesX[ix];
-      const blockY = edgesY[iy];
-      const blockW = edgesX[ix + 1] - blockX;
-      const blockH = edgesY[iy + 1] - blockY;
-      if (blockW < 200 || blockH < 200) continue;
-      const split = random() > 0.45;
-      const cells = split
-        ? [
-            { x: blockX, y: blockY, w: blockW / 2 - 14, h: blockH / 2 - 14 },
-            { x: blockX + blockW / 2 + 14, y: blockY, w: blockW / 2 - 14, h: blockH / 2 - 14 },
-            { x: blockX, y: blockY + blockH / 2 + 14, w: blockW / 2 - 14, h: blockH / 2 - 14 },
-            { x: blockX + blockW / 2 + 14, y: blockY + blockH / 2 + 14, w: blockW / 2 - 14, h: blockH / 2 - 14 },
-          ]
-        : [{ x: blockX + 16, y: blockY + 16, w: blockW - 32, h: blockH - 32 }];
-      for (const cell of cells) {
-        if (random() < 0.12) continue; // an empty lot or plaza keeps the city breathing
-        buildings.push({
-          x: cell.x + rangeFrom(random, 0, 18),
-          y: cell.y + rangeFrom(random, 0, 18),
-          w: cell.w - rangeFrom(random, 0, 30),
-          h: cell.h - rangeFrom(random, 0, 30),
-          color: pickFrom(random, ROOF_COLORS),
-          name: BUILDING_NAMES[nameIndex % BUILDING_NAMES.length],
-          floors: 2 + Math.floor(random() * 6),
-        });
-        nameIndex += 1;
+  // Fill each city block (the rectangles between roads) with buildings,
+  // leaving a pavement margin so the player can always walk around them.
+  const xs = [0, ...AVENUES, CFG.worldW];
+  const ys = [0, ...STREETS, CFG.worldH];
+  let nameIdx = 0;
+  for (let i = 0; i < xs.length - 1; i++) {
+    for (let j = 0; j < ys.length - 1; j++) {
+      const bx0 = xs[i] + (i === 0 ? 24 : CFG.roadW / 2 + 26);
+      const bx1 = xs[i + 1] - (i === xs.length - 2 ? 24 : CFG.roadW / 2 + 26);
+      const by0 = ys[j] + (j === 0 ? 24 : CFG.roadW / 2 + 26);
+      const by1 = ys[j + 1] - (j === ys.length - 2 ? 24 : CFG.roadW / 2 + 26);
+      if (bx1 - bx0 < 150 || by1 - by0 < 150) continue;
+      if (bx0 > BEACH_X - 260) continue; // keep the beach clear
+      const cols = rng.int(1, 2), rows = rng.int(1, 2);
+      const cw = (bx1 - bx0) / cols, ch = (by1 - by0) / rows;
+      for (let cx = 0; cx < cols; cx++) {
+        for (let cy = 0; cy < rows; cy++) {
+          if (rng.chance(0.14)) continue; // plaza / parking gap
+          const pad = 16;
+          const b = {
+            x: bx0 + cx * cw + pad, y: by0 + cy * ch + pad,
+            w: cw - pad * 2, h: ch - pad * 2,
+            color: rng.pick(PALETTE),
+            floors: rng.int(2, 7),
+            name: BUILDING_NAMES[nameIdx++ % BUILDING_NAMES.length],
+            neon: rng.chance(0.3),
+          };
+          buildings.push(b);
+          colliders.push({ x: b.x, y: b.y, w: b.w, h: b.h });
+        }
       }
-      // Palms at the block corners, clear of the road.
-      palms.push({ x: blockX - 12, y: blockY - 12 });
-      palms.push({ x: blockX + blockW + 12, y: blockY + blockH + 12 });
     }
   }
 
-  // A double row of palms along the boardwalk.
-  for (let x = 180; x < WORLD.width - 120; x += 170) {
-    palms.push({ x, y: WORLD.beachY + 26 });
-    palms.push({ x: x + 60, y: WORLD.waterY - 30 });
-  }
-
-  const piers = [];
-  for (const px of [2250, 2620, 2990]) piers.push({ x: px, y: WORLD.waterY, w: 54, h: 190 });
-
-  const places = {
-    start: { x: 1500, y: 1020, label: 'Rio’s Apartment, Palm Row' },
-    marina: { x: 2400, y: 2280, label: 'Serena Marina' },
-    cafe: { x: 940, y: 980, label: 'Cafe Solano' },
-    chopShop: { x: 3260, y: 980, label: 'Solano Motors (back lot)' },
-    boardwalkWest: { x: 700, y: 2300, label: 'Boardwalk West' },
-    boardwalkMid: { x: 1500, y: 2300, label: 'Boardwalk Kiosks' },
-    boardwalkEast: { x: 2300, y: 2300, label: 'Boardwalk East' },
-    safehouse: { x: 360, y: 420, label: 'Auntie Bea’s Safehouse, Old Town' },
-    docks: { x: 3300, y: 2280, label: 'Port Docks' },
-    warehouse: { x: 980, y: 420, label: 'Harbor Warehouse' },
-    pier: { x: 2620, y: 2600, label: 'Pier Nine, Marina' },
-    hospital: { x: 2140, y: 980, label: 'Harbor Clinic' },
-    hotel: { x: 2740, y: 980, label: 'Hotel Brisa' },
-    marinaLot: { x: 2460, y: 2160, label: 'Marina Parking Lot' },
+  // Named anchor buildings the jobs talk about.
+  const anchors = {
+    clinic:   { x: 380,  y: 1620, label: 'Harbor Clinic' },
+    beaShop:  { x: 960,  y: 380,  label: "Auntie Bea's" },
+    marina:   { x: 700,  y: 2150, label: 'Serena Marina' },
+    pierNine: { x: 2990, y: 1420, label: 'Pier Nine' },
+    docks:    { x: 2620, y: 1900, label: 'Port Docks Gate' },
   };
 
-  return { buildings, palms, piers, places, seed };
+  // Palms line Palm Row and the Boardwalk; lamps and crates are pure props.
+  for (let x = 1250; x < 2350; x += 90) palms.push({ x: x + rng.spread(10), y: 250 + rng.spread(14) });
+  for (let y = 1250; y < 2350; y += 90) palms.push({ x: 2880 + rng.spread(10), y: y + rng.spread(14) });
+  for (let i = 0; i < 46; i++) props.push({ x: rng.range(80, 2900), y: rng.range(80, 2320), kind: rng.pick(['crate', 'barrel', 'bench']) });
+
+  // Pier: a walkable deck jutting into the water on the east edge.
+  const pier = { x: 2980, y: 1360, w: 220, h: 120 };
+  // Causeway islet: a small drivable island linked off Ocean Drive.
+  const islet = { x: 2740, y: 1080, w: 180, h: 140 };
+
+  function districtAt(x, y) {
+    for (const d of DISTRICTS) {
+      if (x >= d.x && x < d.x + d.w && y >= d.y && y < d.y + d.h) return d;
+    }
+    return DISTRICTS[0];
+  }
+
+  function isOnRoad(x, y) {
+    const half = CFG.roadW / 2;
+    if (Math.abs(x - OCEAN_DRIVE_X) <= half) return true;
+    for (const ax of AVENUES) if (Math.abs(x - ax) <= half) return true;
+    for (const sy of STREETS) if (Math.abs(y - sy) <= half) return true;
+    return false;
+  }
+
+  // Circle vs. building colliders — returns a push-out correction.
+  function collideCircle(px, py, r) {
+    let x = px, y = py;
+    for (const c of colliders) {
+      const nx = clamp(x, c.x, c.x + c.w), ny = clamp(y, c.y, c.y + c.h);
+      const dx = x - nx, dy = y - ny, d2 = dx * dx + dy * dy;
+      if (d2 < r * r) {
+        if (d2 < 0.01) { y = c.y - r; continue; }
+        const d = Math.sqrt(d2);
+        x = nx + (dx / d) * r; y = ny + (dy / d) * r;
+      }
+    }
+    x = clamp(x, r, CFG.worldW - r);
+    y = clamp(y, r, CFG.worldH - r);
+    return { x, y };
+  }
+
+  // Intersection list for traffic routing.
+  const intersections = [];
+  for (const ax of AVENUES) for (const sy of STREETS) intersections.push({ x: ax, y: sy });
+  for (const sy of STREETS) intersections.push({ x: OCEAN_DRIVE_X, y: sy });
+
+  return {
+    seed, buildings, colliders, palms, props, anchors, pier, islet,
+    intersections, districtAt, isOnRoad, collideCircle,
+    avenues: AVENUES, streets: STREETS, oceanDriveX: OCEAN_DRIVE_X, beachX: BEACH_X,
+  };
 }
+
+export const world = buildWorld(7);
+export { buildWorld };

@@ -1,241 +1,249 @@
-// The story of Vice Harbor: six jobs for fixer Auntie Bea that teach the city one system at
-// a time — a first delivery, a neon street race, a marked car to steal, a VIP to ferry, cash
-// to gather on the boardwalk, and a final getaway under the helicopter. Each job is a short
-// list of steps; this system watches the player, moves the objective marker, runs the
-// timers, pays the reward and saves. The renderer reads state.objective and state.jobInfo.
-// The order is the curriculum: First Run teaches driving, Neon Rush teaches speed, Hot
-// Solano teaches stealing, the VIP job teaches care, Beach Money teaches the map on foot,
-// and the Send-Off examines everything at once under three stars of heat.
+// missions.js — six story jobs for Rio, all given by his Auntie Bea.
+// Jobs run in sequence. Each job is a list of steps; a step is done when
+// Rio reaches its marker the right way (on foot, in any car, or in one
+// specific car). The renderer draws the marker, the minimap blip, the
+// edge arrow and a light pillar from getObjective().
 
-import { VEHICLE_MODELS } from './config.js';
+import { MISSION_REWARDS } from './config.js';
+import { dist } from './random.js';
+import { world } from './world.js';
+import { makeVehicle, makePed } from './entities.js';
 
-const RACE_POINTS = [
-  { x: 2100, y: 300, label: 'Checkpoint 1 — Palm Row North' },
-  { x: 3300, y: 900, label: 'Checkpoint 2 — University East' },
-  { x: 2700, y: 1500, label: 'Checkpoint 3 — Harbor Cross' },
-  { x: 1500, y: 2100, label: 'Checkpoint 4 — Boardwalk South' },
-  { x: 900, y: 900, label: 'Finish — Old Town West' },
-];
+const A = world.anchors;
 
-export function createJobs(city) {
-  const P = city.places;
+function jobDefs() {
   return [
     {
-      id: 'first-run', title: 'First Run for Bea', reward: 150, respect: 1,
-      intro: 'Bea: “Pick up a package at Serena Marina and bring it to Cafe Solano. Simple. Paid.”',
+      title: 'First Run for Bea',
+      brief: "Pick up Bea's parcel and drive it to Serena Marina.",
       steps: [
-        { type: 'goto', place: P.marina, label: 'Pick up the package at Serena Marina', radius: 84 },
-        { type: 'goto', place: P.cafe, label: 'Deliver the package to Cafe Solano', radius: 84 },
+        { kind: 'goto', x: A.beaShop.x, y: A.beaShop.y + 70, r: 60, label: "Auntie Bea's — collect the parcel" },
+        { kind: 'drive', x: A.marina.x, y: A.marina.y, r: 80, label: 'Drive the parcel to Serena Marina' },
       ],
     },
     {
-      id: 'neon-rush', title: 'Neon Rush', reward: 300, respect: 2,
-      intro: 'Bea: “The Palm Row crew runs a checkpoint race at dusk. Win it and they owe us.”',
+      title: 'Neon Rush',
+      brief: 'Five checkpoints across Palm Row before the clock dies. Bea forces dusk — the neon is the point.',
+      timer: 165, forceHour: 19.3,
+      steps: [1500, 2100, 2680, 2100, 1500].map((x, i) => ({
+        kind: 'drive', x, y: [300, 900, 1500, 2050, 1500][i], r: 74,
+        label: `Checkpoint ${i + 1} of 5`,
+      })),
+    },
+    {
+      title: 'Hot Solano',
+      brief: 'A yellow Solano GT is parked up in the University Quarter. Take it. Deliver it to the Port Docks gate.',
       steps: [
-        { type: 'race', points: RACE_POINTS, label: 'Run the Neon Rush checkpoints', timer: 110 },
+        { kind: 'steal', x: 2620, y: 420, r: 60, label: 'Steal the marked Solano GT', carAt: { x: 2620, y: 420 } },
+        { kind: 'drive', x: A.docks.x, y: A.docks.y, r: 90, label: 'Deliver the Solano GT to the Port Docks gate', needsMissionCar: true },
       ],
     },
     {
-      id: 'hot-solano', title: 'Hot Solano', reward: 350, respect: 2,
-      intro: 'Bea: “A blue Solano GT sits in the Marina lot. Take it. Solano Motors pays for it, no questions.”',
+      title: 'VIP to the Marina',
+      brief: 'Singer Lulu Mar is waiting at the Boardwalk. Get her to Serena Marina before her set starts.',
+      timer: 130,
       steps: [
-        { type: 'steal', place: P.marinaLot, label: 'Steal the blue Solano GT in the Marina lot', radius: 90 },
-        { type: 'goto', place: P.chopShop, label: 'Deliver the Solano GT to Solano Motors', radius: 96, needVehicle: true },
+        { kind: 'pickup', x: 1800, y: 1560, r: 56, label: 'Pick up Lulu Mar', passengerAt: { x: 1800, y: 1560 } },
+        { kind: 'drive', x: A.marina.x, y: A.marina.y, r: 85, label: 'Drive Lulu Mar to Serena Marina', needsPassenger: true },
       ],
     },
     {
-      id: 'vip', title: 'VIP to the Marina', reward: 400, respect: 3,
-      intro: 'Bea: “A singer named Lulu Mar is hiding at Hotel Brisa. Drive her to the Marina. Gently.”',
-      steps: [
-        { type: 'pickup', place: P.hotel, label: 'Pick up Lulu Mar at Hotel Brisa (stop your car)', radius: 92 },
-        { type: 'goto', place: P.marina, label: 'Drive Lulu Mar to Serena Marina', radius: 96, needVehicle: true, timer: 130 },
-      ],
+      title: 'Beach Money',
+      brief: 'Three debtors left cash along the Boardwalk. Collect all three — on foot, quiet-like.',
+      steps: [0, 1, 2].map((i) => ({
+        kind: 'collect', x: [2280, 2360, 2300][i], y: [1300, 1630, 1960][i], r: 42,
+        label: `Collect cash drop ${i + 1} of 3 (on foot)`,
+      })),
     },
     {
-      id: 'beach-money', title: 'Beach Money', reward: 250, respect: 2,
-      intro: 'Bea: “Three drops were left along the Boardwalk. On foot, quiet, quick.”',
+      title: 'Serena Send-Off',
+      brief: 'Last job. Take the Dockmaster at the Port Docks and run it to Pier Nine. The SPD will object.',
+      heatOnStart: 70,
       steps: [
-        { type: 'collect', places: [P.boardwalkWest, P.boardwalkMid, P.boardwalkEast], label: 'Collect the Boardwalk drops', radius: 52 },
-      ],
-    },
-    {
-      id: 'send-off', title: 'Serena Send-Off', reward: 600, respect: 4,
-      intro: 'Bea: “Last job. Grab the freight at the Port Docks and reach Pier Nine — the whole SPD will object.”',
-      steps: [
-        { type: 'goto', place: P.docks, label: 'Pick up the freight at the Port Docks', radius: 96, needVehicle: true },
-        { type: 'escape', place: P.pier, label: 'Reach Pier Nine — lose them or outrun them', radius: 100 },
+        { kind: 'goto', x: A.docks.x, y: A.docks.y, r: 80, label: 'Reach the Port Docks gate' },
+        { kind: 'drive', x: A.pierNine.x, y: A.pierNine.y, r: 95, label: 'Getaway: reach Pier Nine', needsAnyCar: true },
       ],
     },
   ];
 }
 
-export function createMissionSystem(game, city, random) {
-  const { state } = game;
-  const jobs = createJobs(city);
-  let stepIndex = 0;
-  let stepTimer = 0;
-  let raceIndex = 0;
-  let collected = 0;
-  let targetVehicle = null;
-  let announcedJob = -1;
-  let escapeHeatSet = false;
-
-  function currentJob() {
-    return jobs[state.missionIndex % jobs.length];
+export class Missions {
+  constructor() {
+    this.defs = jobDefs();
+    this.index = 0;      // 0..5 active job, 6 = story complete
+    this.step = 0;
+    this.timer = null;   // seconds left, when the job is timed
+    this.active = false;
+    this.missionCar = null;
+    this.passenger = null;
+    this.banner = '';
+    this.bannerTimer = 0;
+    this.betweenTimer = 0;
   }
 
-  function currentStep() {
-    return currentJob().steps[stepIndex];
+  get current() { return this.index < this.defs.length ? this.defs[this.index] : null; }
+  get currentStep() {
+    const job = this.current;
+    return job ? job.steps[this.step] || null : null;
   }
 
-  function spawnTargetVehicle() {
-    const model = VEHICLE_MODELS.find((m) => m.name === 'Solano GT');
-    const place = city.places.marinaLot;
-    targetVehicle = {
-      x: place.x, y: place.y, angle: 0, speed: 0,
-      model, color: model.color, kind: 'car', driver: 'mission',
-      health: 100, honkTimer: 0, axis: 'x', direction: 1, cruise: 0,
-    };
-    state.vehicles.push(targetVehicle);
-    state.parked.push(targetVehicle);
+  activate(game) {
+    const job = this.current;
+    if (!job) { this.active = false; return; }
+    this.active = true;
+    this.step = 0;
+    this.timer = job.timer ?? null;
+    this.missionCar = null;
+    this.passenger = null;
+    if (job.forceHour !== undefined) game.hour = job.forceHour;
+    if (job.heatOnStart) game.police.addHeat(job.heatOnStart);
+    this.setupStep(game);
+    this.showBanner(game, `${job.title} — ${job.brief}`);
   }
 
-  function setObjective(x, y, label) {
-    const focus = game.playerPosition();
-    state.objective = {
-      x, y, label,
-      distance: Math.round(Math.hypot(x - focus.x, y - focus.y)),
-    };
-  }
-
-  function completeStep() {
-    const job = currentJob();
-    stepIndex += 1;
-    stepTimer = 0;
-    raceIndex = 0;
-    collected = 0;
-    escapeHeatSet = false;
-    game.emit('step');
-    if (stepIndex >= job.steps.length) completeJob(job);
-    else state.message = currentStep().label;
-    state.messageTimer = 3;
-  }
-
-  function completeJob(job) {
-    state.cash += job.reward;
-    state.respect += job.respect;
-    if (!state.completedJobs.includes(job.id)) state.completedJobs.push(job.id);
-    state.message = `Job done: ${job.title} — +$${job.reward}`;
-    state.messageTimer = 4.2;
-    game.emit('jobdone');
-    stepIndex = 0;
-    state.missionIndex = (state.missionIndex + 1) % jobs.length;
-    announcedJob = -1;
-    if (job.id === 'send-off') {
-      state.wanted = 0;
-      state.message = 'Story complete — Port Serena is yours. Jobs now repeat for cash.';
-      state.messageTimer = 5;
+  setupStep(game) {
+    const s = this.currentStep;
+    if (!s) return;
+    if (s.kind === 'steal' && s.carAt && !this.missionCar) {
+      const car = makeVehicle('solano', s.carAt.x, s.carAt.y, Math.PI / 2, 'mission');
+      this.missionCar = car;
+      game.vehicles.push(car);
     }
-    game.saveGame();
+    if (s.kind === 'pickup' && s.passengerAt && !this.passenger) {
+      const ped = makePed(s.passengerAt.x, s.passengerAt.y, game.rng);
+      ped.color = '#ff5d8f';
+      ped.state = 'wait';
+      this.passenger = ped;
+      game.peds.push(ped);
+    }
+    // The Send-Off getaway truck waits at the docks from job start.
+    if (this.current && this.current.title === 'Serena Send-Off' && this.step === 0 && !this.missionCar) {
+      const truck = makeVehicle('dock', world.anchors.docks.x + 60, world.anchors.docks.y + 40, 0, 'mission');
+      this.missionCar = truck;
+      game.vehicles.push(truck);
+    }
   }
 
-  function failTimerStep(reason) {
-    stepTimer = 0;
-    raceIndex = 0;
-    state.message = reason;
-    state.messageTimer = 3.4;
-    game.emit('fail');
+  showBanner(game, text) {
+    this.banner = text;
+    this.bannerTimer = 4.5;
+    game.message = text;
+    game.messageTimer = 4.5;
   }
 
-  function update(dt) {
-    const job = currentJob();
-    if (announcedJob !== state.missionIndex) {
-      announcedJob = state.missionIndex;
-      state.message = job.intro;
-      state.messageTimer = 5;
-      if (job.id === 'hot-solano' && !targetVehicle) spawnTargetVehicle();
-      if (job.id === 'neon-rush') state.timeOfDay = 0.86; // the race always runs at neon dusk
+  getObjective() {
+    const s = this.currentStep;
+    if (!this.active || !s) return null;
+    // While stealing, the objective is the car itself if it has moved.
+    if (s.kind === 'steal' && this.missionCar) {
+      return { x: this.missionCar.x, y: this.missionCar.y, label: s.label, r: s.r };
     }
-    const step = currentStep();
-    if (!step) return;
-    const focus = game.playerPosition();
-    const inVehicle = Boolean(state.player.vehicle);
+    return { x: s.x, y: s.y, label: s.label, r: s.r };
+  }
 
-    if (step.type === 'goto' || step.type === 'escape') {
-      setObjective(step.place.x, step.place.y, step.label);
-      if (step.type === 'escape' && !escapeHeatSet) {
-        escapeHeatSet = true;
-        if (state.wanted < 3) game.raiseWanted(3 - state.wanted, 'The SPD is all over this run');
-      }
-      if (step.timer) {
-        stepTimer += dt;
-        state.jobInfo = { title: job.title, label: step.label, timerLeft: Math.max(0, step.timer - stepTimer) };
-        if (stepTimer > step.timer) {
-          failTimerStep('Too slow — the job resets. Try again.');
-          return;
-        }
-      } else {
-        state.jobInfo = { title: job.title, label: step.label, timerLeft: null };
-      }
-      const distance = Math.hypot(focus.x - step.place.x, focus.y - step.place.y);
-      if (distance <= step.radius && (!step.needVehicle || inVehicle)) completeStep();
-      return;
+  resetCurrentStep(game) {
+    // Timeout / busted / wasted: restart the current step, keep the job.
+    const job = this.current;
+    if (!job) return;
+    this.timer = job.timer ?? null;
+    if (this.passenger) {
+      this.passenger.isPassenger = false;
+      this.passenger.state = 'stroll';
+      this.passenger = null;
+      // The pickup step will re-spawn her.
+      if (this.currentStep && this.currentStep.kind !== 'pickup') this.step = 0;
+      else this.setupStep(game);
     }
+    if (job.forceHour !== undefined) game.hour = job.forceHour;
+  }
 
-    if (step.type === 'steal') {
-      const target = targetVehicle;
-      if (target) setObjective(target.x, target.y, step.label);
-      state.jobInfo = { title: job.title, label: step.label, timerLeft: null };
-      if (target && state.player.vehicle === target) {
-        game.raiseWanted(1, 'That is the car — the SPD noticed');
-        completeStep();
+  completeJob(game) {
+    const reward = MISSION_REWARDS[this.index];
+    game.player.cash += reward.cash;
+    game.player.respect += reward.respect;
+    game.stats.jobsDone++;
+    game.audio?.sfx('success');
+    this.showBanner(game, `Job complete: +$${reward.cash}, +${reward.respect} respect`);
+    this.index++;
+    this.active = false;
+    this.missionCar = null;
+    if (this.passenger) { this.passenger.isPassenger = false; this.passenger.state = 'stroll'; this.passenger = null; }
+    game.save();
+    this.betweenTimer = 2.5; // breather, then the next job activates
+  }
+
+  update(dt, game) {
+    if (this.bannerTimer > 0) this.bannerTimer -= dt;
+    if (!this.active) {
+      if (this.index < this.defs.length) {
+        this.betweenTimer -= dt;
+        if (this.betweenTimer <= 0) this.activate(game);
       }
       return;
     }
+    const job = this.current;
+    const s = this.currentStep;
+    if (!job || !s) { this.completeJob(game); return; }
 
-    if (step.type === 'race') {
-      const point = step.points[raceIndex];
-      setObjective(point.x, point.y, `${step.label} (${raceIndex + 1}/${step.points.length})`);
-      stepTimer += dt;
-      state.jobInfo = { title: job.title, label: step.label, timerLeft: Math.max(0, step.timer - stepTimer) };
-      if (stepTimer > step.timer) {
-        failTimerStep('Out of time — the Neon Rush resets. Grab a fast car.');
+    if (this.timer !== null) {
+      this.timer -= dt;
+      if (this.timer <= 0) {
+        this.showBanner(game, 'Out of time — the job resets. Try again.');
+        game.audio?.sfx('fail');
+        this.step = 0;
+        this.timer = job.timer ?? null;
+        if (job.forceHour !== undefined) game.hour = job.forceHour;
+        this.setupStep(game);
         return;
       }
-      if (inVehicle && Math.hypot(focus.x - point.x, focus.y - point.y) < 110) {
-        raceIndex += 1;
-        game.emit('checkpoint');
-        if (raceIndex >= step.points.length) completeStep();
-      }
-      return;
     }
 
-    if (step.type === 'pickup') {
-      setObjective(step.place.x, step.place.y, step.label);
-      state.jobInfo = { title: job.title, label: step.label, timerLeft: null };
-      if (inVehicle && Math.abs(state.player.vehicle.speed) < 14
-        && Math.hypot(focus.x - step.place.x, focus.y - step.place.y) <= step.radius) {
-        state.passenger = { name: 'Lulu Mar' };
-        state.message = 'Lulu Mar: “Marina. Fast, but keep the paint on.”';
-        state.messageTimer = 3;
-        completeStep();
+    const p = game.player;
+    const obj = this.getObjective();
+    const d = dist(p.x, p.y, obj.x, obj.y);
+    let done = false;
+
+    switch (s.kind) {
+      case 'goto':
+        done = d < s.r;
+        break;
+      case 'drive':
+        if (s.needsMissionCar) done = p.inCar === this.missionCar && d < s.r;
+        else if (s.needsPassenger) done = !!p.passengerAboard && p.inCar && d < s.r;
+        else if (s.needsAnyCar) done = !!p.inCar && d < s.r;
+        else done = !!p.inCar && d < s.r;
+        break;
+      case 'collect':
+        done = !p.inCar && d < s.r;
+        if (done) game.audio?.sfx('pickup');
+        break;
+      case 'steal':
+        done = p.inCar === this.missionCar;
+        break;
+      case 'pickup': {
+        if (d < s.r && this.passenger) {
+          if (p.inCar) {
+            this.passenger.isPassenger = true;
+            p.passengerAboard = true;
+            done = true;
+          } else if (d < 30) {
+            game.message = 'Lulu needs a car — bring one to her.';
+            game.messageTimer = 1.2;
+          }
+        }
+        break;
       }
-      return;
+      default:
+        break;
     }
 
-    if (step.type === 'collect') {
-      const remaining = step.places.slice(collected);
-      const next = remaining[0];
-      if (next) setObjective(next.x, next.y, `${step.label} (${collected}/${step.places.length})`);
-      state.jobInfo = { title: job.title, label: step.label, timerLeft: null };
-      if (!inVehicle && next && Math.hypot(focus.x - next.x, focus.y - next.y) <= step.radius) {
-        collected += 1;
-        state.cash += 25;
-        game.emit('pickup');
-        if (collected >= step.places.length) completeStep();
+    if (done) {
+      this.step++;
+      if (this.step >= job.steps.length) this.completeJob(game);
+      else {
+        game.audio?.sfx('pickup');
+        this.setupStep(game);
       }
     }
   }
-
-  return { update, jobs, currentJob };
 }

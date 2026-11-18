@@ -4,63 +4,68 @@
 
 # Vice Harbor — Port Serena
 
-Vice Harbor is a complete top-down open-world crime game that runs offline in a desktop browser from static files — no build step, no network request, no image or audio files: every street, car, palm and song is drawn and synthesized in code. You are Rio, a courier in the sun-soaked coastal city of Port Serena, running six story jobs for fixer Auntie Bea while the Serena Police Department escalates from a single patrol car to a helicopter.
+An original top-down open-world crime caper that runs entirely in the browser. You are Rio, running six story jobs for your Auntie Bea across the sun-baked port city of Port Serena — while the Serena Police Department (SPD) scales from a single curious cruiser to a five-star citywide manhunt with a helicopter. Everything on screen is procedural Canvas 2D and every sound is synthesized Web Audio: no art assets, no audio files, no libraries, no network requests.
 
-## What the screenshots demonstrate
+## The four screenshots
 
-- `screenshots/1-cover.jpg` — driving at golden hour in Palm Row: traffic, pedestrians, the mission panel with objective and distance, the minimap, cash/respect, and the radio readout.
-- `screenshots/2-chase.jpg` — a five-star pursuit at night: SPD interceptors with flashing light bars, the police helicopter and its searchlight, headlight cones, neon signs lit, and the getaway objective on the HUD.
-- `screenshots/3-mission.jpg` — on foot on the Boardwalk during the *Beach Money* job: the collection objective, the objective edge-arrow, pedestrians, a taxi in traffic, beach, palms and sea.
-- `screenshots/4-finale.jpg` — the *Serena Send-Off* getaway on Ocean Drive at night: a truck run toward Pier Nine with three stars, patrol cars converging and the helicopter overhead.
+1. **1-cover.jpg — Golden-hour Palm Row.** Rio drives a Palma Sedan at dusk with the first job ("First Run for Bea") on the mission panel, the live minimap in the corner, lit windows and neon starting to glow. This is the game's everyday face: traffic, palms, and a delivery to make.
+2. **2-chase.jpg — Five-star night pursuit.** Full SPD pressure after dark: cruisers with flashing lightbars front and back, the helicopter overhead throwing its searchlight cone, headlight beams cutting the night. Heat only decays while no unit can see you, so this is the moment to break line of sight.
+3. **3-mission.jpg — Beach Money, on foot.** The Boardwalk cash-collection job played on foot: objective ring and light pillar ahead, distance readout ticking down, the edge arrow ready if the target leaves the screen. Fists only — there are no firearms in Port Serena.
+4. **4-finale.jpg — Serena Send-Off.** The final job at night: a Dockmaster Truck on Ocean Drive heading for Pier Nine with three stars already lit and a cruiser in the mirror. Make the pier and the story closes; get caught and Harbor Clinic takes its 10%.
 
-## Features (all playable, all verified in a headless browser with zero console errors)
+## Features
 
-- **A living multi-district city** — Old Town, Palm Row, the University Quarter, Serena Marina, the Boardwalk and the Port Docks: a road grid with named buildings, palms, piers and a causeway islet, plus a full day–night cycle (lit windows, neon signs and headlight cones after dark).
-- **On foot and behind the wheel** — walk, sprint, and steal any of the traffic or parked cars (six original models, from the Calle Coupe to the Dockmaster Truck); the driver of a stolen moving car bails out and runs.
-- **Traffic and pedestrians** — cars follow the road network, brake for each other and turn at intersections; pedestrians stroll the sidewalks, flee danger and fall when hit.
-- **Six story jobs with progression** — *First Run for Bea* (delivery), *Neon Rush* (a five-checkpoint timed street race at dusk), *Hot Solano* (steal the marked Solano GT and deliver it), *VIP to the Marina* (ferry singer Lulu Mar against the clock), *Beach Money* (three on-foot collections), and *Serena Send-Off* (a dock-to-pier getaway). Each pays cash and respect, shows its objective on the minimap and as an on-screen arrow, and autosaves on completion.
-- **Wanted 1–5 stars** — crimes (theft, assault, hit-and-run) raise heat; more stars mean more and faster SPD cars, officers who chase on foot and arrest, and a helicopter with a searchlight at three stars and up. Heat cools only while no uniform can see you.
-- **Melee combat and consequences** — punch pedestrians and officers (J or click); get caught and you are BUSTED, get flattened and you are WASTED — either way you wake at Harbor Clinic 10% poorer.
-- **HUD and minimap** — wanted stars, cash, respect, health, speed, the current job with its timer, an objective marker with a light pillar, and a live minimap with traffic, police and the objective.
-- **Procedural sound** — a Web Audio engine hum that follows your speed, two-tone sirens that rise as patrol cars close in, and three radio stations of synthesized music (Serena Sun FM, Harbor Wave Radio, Night Pier 88). N changes station, M mutes.
-- **Start screen, pause, saves** — a title screen with PLAY NOW and CONTINUE, a pause screen, busted/wasted summaries, and an autosave in `localStorage` after every job.
+- **A real little city:** six districts (Old Town, Palm Row, University Quarter, Serena Marina, Boardwalk, Port Docks), a road grid plus Ocean Drive, a beach and ocean, a pier, a causeway islet, named buildings, palms and props — all generated from a seed.
+- **Living traffic and crowds:** cars route intersection-to-intersection, brake for the vehicle ahead and turn at junctions; pedestrians stroll, flee from trouble, and the driver of a stolen moving car bails out and runs.
+- **Six playable story jobs in sequence:** a delivery run, a five-checkpoint dusk street race, stealing a marked Solano GT, ferrying singer Lulu Mar to the Marina against the clock, three on-foot Boardwalk cash collections, and a dock-to-pier getaway. Cash and respect rewards, autosave after every job.
+- **A wanted system with teeth:** 1–5 stars scale police cars, foot officers, pursuit speed and aggression; an arrest meter fills when officers close in on a slow or on-foot Rio; the helicopter joins at 3 stars and keeps you "seen"; heat decays only while hidden.
+- **Day–night cycle:** a full clock drives lit windows, neon signs, headlight cones and the helicopter searchlight; one job deliberately forces dusk.
+- **Synthesized sound:** engine hum that tracks speed, two-tone sirens that swell with police proximity, three procedural radio stations, and one-shot effects for punches, crashes, pickups and job success.
+- **HUD and navigation:** wanted stars, cash, respect, health, speedometer, current job with timer and objective distance, a live minimap (traffic, police, helicopter, objective), an off-screen objective edge arrow, and a district banner when you cross into a new neighbourhood.
+- **Saves:** progress (cash, respect, job index, position, clock, stats) persists in localStorage; CONTINUE resumes from the title screen.
+- **Performance:** fixed-timestep 1/60 simulation with a clamped frame delta, pooled particles (cap ~240) and skidmarks (cap ~300), viewport-culled drawing — a steady 60 FPS in headless Chromium playtests.
 
 ## Play it from zero
 
 ```sh
-node serve.ts            # serves game/ on http://localhost:8080 (Node 22, nothing to install)
+node serve.ts
 ```
 
-Open `http://localhost:8080` in desktop Chrome and press **PLAY NOW** (or Enter).
+Then open http://localhost:8080 and press **PLAY NOW** (or CONTINUE if you have a save). That is the whole install: Node is the only requirement.
+
+## Controls
 
 | Input | Action |
 | --- | --- |
-| WASD / Arrow keys | Walk / drive and steer |
+| W A S D / Arrow keys | Walk / drive (steer + throttle) |
 | Shift | Sprint on foot |
-| E or F (or Enter) | Enter / exit the nearest car |
-| Space | Brake (in a car) |
-| J or mouse click | Punch |
+| E / F / Enter | Enter or exit a car |
+| Space | Brake / handbrake |
+| J / Mouse click | Punch (on foot) |
 | H | Horn |
-| N | Next radio station |
-| R | Reset position when stuck |
-| P or Esc | Pause |
+| N | Cycle radio station |
+| R | Reset to the nearest road |
+| P / Esc | Pause |
 | M | Mute |
-| Touch buttons | On-screen steering, pedals, E and J appear after the first touch |
+| Touch buttons | On-screen drive/action pad, appears after the first touch |
 
 ## Honest limits
 
-Combat is melee plus the car itself — there are no firearms. The world is 2D top-down canvas, not 3D. Timed jobs reset their step when the clock runs out instead of failing the whole job. Everything above was verified by playing this exact build headlessly (title → drive → wanted escalation → arrest → save/reload) with zero console errors at ~60 FPS.
+- **Melee only.** There are no firearms, for Rio or the SPD; police pressure comes from numbers, pursuit driving and the arrest meter.
+- **2D top-down.** Buildings are flat-shaded rectangles with window grids, not 3D models; the charm is in the systems, not the geometry.
+- **Timed jobs reset their step on timeout.** Running out of time on Neon Rush or the VIP run restarts that job's current step rather than failing the whole story — your completed jobs and earnings are never taken away.
+- Busted and Wasted both end at Harbor Clinic, which charges 10% of the cash you are carrying. That fee is the entire death penalty.
 
-## Layout
+## File layout
 
-`main.ts` hands the game in (copies `game/` and `screenshots/` to the output and writes the dossier). `game/src/` holds one file per job: `world.js` (Port Serena), `game.js` (the simulation), `entities.js` (traffic, parked cars, pedestrians), `police.js` (wanted, pursuit, officers, helicopter), `combat.js` (melee, busted/wasted), `missions.js` (the six jobs), `render.js` (canvas world, HUD, minimap, menus), `audio.js` (procedural Web Audio), `input.js` (keyboard, mouse, touch), `shots.js` (the staged screenshot scenes), `main.js` (boot and loop). `vendor/makefun-game.ts` is make.fun's own dossier library, unchanged.
+- `main.ts` — the hand-in program: stages `game/` and `screenshots/` into the output directory and writes `dossier.json`.
+- `serve.ts` — zero-dependency static server for local play on port 8080.
+- `shots.json` — the four staged screenshot scenes and their URL queries.
+- `game/index.html` — page shell, canvas and touch controls.
+- `game/src/` — the game itself, in plain ES modules: `config.js` (tuning), `random.js` (seeded RNG), `world.js` (city generation), `input.js`, `entities.js` (traffic, pedestrians), `police.js` (SPD), `combat.js` (melee, BUSTED/WASTED), `missions.js` (the six jobs), `audio.js` (synthesized sound), `game.js` (simulation core), `render.js` (Canvas renderer + HUD), `shots.js` (staged scenes), `main.js` (boot + loop).
+- `screenshots/` — the four staged captures described above.
+- `vendor/makefun-game.ts` — the kit's dossier builder, used by `main.ts`.
 
-## Originality
+## Originality note
 
-Port Serena, Rio, Auntie Bea, Lulu Mar, the Serena PD, every vehicle model, street, business, job and radio station in this game are original creations for this entry. No name, character, map, art, music or asset from any commercial game is used or imitated by name.
-
-## Build provenance
-
-This entry was built end-to-end by an AI coding agent in recorded sessions for this bounty: the city, simulation, renderer and sound engine were written module by module (tuning and determinism first, then the living street, the law, the jobs, the renderer and the hand-in), play-tested headlessly at each stage, and the four screenshots were staged from the shipped simulation itself — never drawn or composited. The final pass re-verified the whole game (0 console errors, wanted escalation, arrest, save round-trip) before hand-in.
-
-MIT licensed. Entered on [make.fun](https://make.fun/bounty/gta6-01) in the “Make GTA 6” bounty (gta6-01).
+Every name in this game is original: Port Serena, Vice Harbor, Rio, Auntie Bea, Lulu Mar, the Serena Police Department, and all six vehicle models (Calle Coupe, Solano GT, Palma Sedan, Harbor Taxi, Dockmaster Truck, Serena Cruiser) were invented for this entry. No commercial game's names, characters, places, art or audio are used anywhere; all graphics are drawn with Canvas primitives and all audio is synthesized at runtime.

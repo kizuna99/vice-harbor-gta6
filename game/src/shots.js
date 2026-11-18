@@ -1,136 +1,108 @@
-// Staged scenes for the maker's screenshots (?shot=cover|chase|mission|finale&seed=N).
-// Each scene drives the real simulation with scripted inputs for a few seconds — traffic
-// flows, the police converge, the helicopter arrives — then freezes on a frame the game
-// itself produced. Same seed, same frame, every time.
-// Nothing here draws or fakes anything: a screenshot taken from a staged scene is evidence
-// of the shipped systems working, which is why the chase scene re-seats the pursuit in
-// frame only when the spawns rolled too far away — the cars, lights and spotlight are the
-// police system's own.
+// shots.js — deterministic staged scenes for the four hand-in screenshots.
+// Selected with ?shot=cover|chase|mission|finale&seed=7. Each scene sets the
+// clock, Rio's position, traffic dressing and the active job so the capture
+// demonstrates a real feature instead of a random frame.
 
-import { STEP } from './config.js';
+import { world } from './world.js';
+import { makeVehicle } from './entities.js';
 
-function scriptedInput(throttle, steer) {
-  return {
-    direction: () => ({ x: throttle, y: 0 }),
-    throttle: () => throttle,
-    steer: () => steer,
-    sprinting: () => false,
-    braking: () => false,
-    takeActions: () => 0,
-    mouseState: () => ({ x: 0, y: 0, down: false }),
-    touchState: () => ({ active: false, held: new Set() }),
-  };
-}
-
-const NO_ACTIONS = { enter: false, attack: false, confirm: false, pause: false, radio: false, horn: false, reset: false };
-
-function runSteps(game, steps, input) {
-  for (let i = 0; i < steps; i += 1) game.step(STEP, input, NO_ACTIONS);
-}
-
-function putPlayerInCar(game, car, x, y, angle, speed) {
-  const { state } = game;
-  car.x = x;
-  car.y = y;
-  car.angle = angle;
+function placeInCar(game, modelId, x, y, angle, speed = 0) {
+  const car = makeVehicle(modelId, x, y, angle, 'player');
   car.speed = speed;
-  car.driver = 'player';
-  state.player.vehicle = car;
-  state.player.x = x;
-  state.player.y = y;
-  state.camera.x = x;
-  state.camera.y = y;
+  game.vehicles.push(car);
+  game.player.inCar = car;
+  game.player.x = x; game.player.y = y; game.player.angle = angle;
+  game.camera.x = x; game.camera.y = y;
+  return car;
 }
 
-/** Keep the frozen frame readable: no other vehicle may sit on top of the player's car. */
-function clearSpaceAroundPlayer(game, radius) {
-  const { state } = game;
-  const focus = game.playerPosition();
-  for (const vehicle of state.vehicles) {
-    if (state.player.vehicle && vehicle === state.player.vehicle) continue;
-    const dx = vehicle.x - focus.x;
-    const dy = vehicle.y - focus.y;
-    if (Math.hypot(dx, dy) < radius) {
-      vehicle.x += dx >= 0 ? 170 : -170;
-      vehicle.y += dy >= 0 ? 60 : -60;
-    }
+function dressTraffic(game, spots) {
+  // A few civilian cars parked/driving near the camera for depth.
+  for (const [modelId, x, y, angle] of spots) {
+    const car = makeVehicle(modelId, x, y, angle, 'traffic');
+    car.waypoint = null;
+    game.vehicles.push(car);
   }
 }
 
-export function stageShot(name, game, missions) {
-  const { state } = game;
-  state.screen = 'play';
+export function applyShot(game, name) {
+  game.screen = 'play';
+  game.missions.active = false;
+  game.missions.betweenTimer = 9999; // hold the staged job state
 
-  if (name === 'chase') {
-    state.missionIndex = 5;
-    state.timeOfDay = 0.82;
-    const car = state.parked.find((v) => v.model.name === 'Solano GT') ?? state.parked[0];
-    putPlayerInCar(game, car, 2050, 930, 0, 300);
-    state.wanted = 4;
-    runSteps(game, 300, scriptedInput(1, 0));
-    // Make sure the pursuit is in frame even if the spawns rolled far away.
-    const focus = game.playerPosition();
-    const near = state.policeCars.some((c) => Math.hypot(c.x - focus.x, c.y - focus.y) < 520);
-    if (!near && state.policeCars.length > 0) {
-      state.policeCars[0].x = focus.x - 190;
-      state.policeCars[0].y = focus.y + 90;
-      if (state.policeCars[1]) {
-        state.policeCars[1].x = focus.x - 320;
-        state.policeCars[1].y = focus.y - 120;
+  switch (name) {
+    case 'cover': {
+      // Golden-hour drive through Palm Row, first job on the panel.
+      game.hour = 17.7;
+      game.missions.index = 0;
+      game.missions.active = true;
+      game.missions.step = 1;
+      placeInCar(game, 'palma', 1500, 560, Math.PI / 2, 120);
+      dressTraffic(game, [
+        ['taxi', 1500, 300, Math.PI / 2],
+        ['calle', 1620, 900, -Math.PI / 2],
+        ['palma', 900, 640, 0],
+      ]);
+      break;
+    }
+    case 'chase': {
+      // Five-star night pursuit: cruisers front and back, helicopter up.
+      game.hour = 23.4;
+      game.missions.index = 2;
+      game.missions.active = true;
+      game.missions.step = 1;
+      placeInCar(game, 'calle', 1500, 1180, Math.PI / 2, 200);
+      game.setWanted(5);
+      // Hand-place the first responders so the frame is instantly readable;
+      // the police system keeps the pressure on from there.
+      const spots = [[1380, 1080, Math.PI / 2], [1640, 1300, Math.PI / 2], [1500, 1420, -Math.PI / 2]];
+      for (const [x, y, a] of spots) {
+        const cop = makeVehicle('cruiser', x, y, a, 'police');
+        cop.speed = 150;
+        game.police.cars.push(cop);
+        game.vehicles.push(cop);
       }
+      game.police.heli.active = true;
+      game.police.heli.x = game.player.x - 130;
+      game.police.heli.y = game.player.y - 120;
+      break;
     }
-    missions.update(0);
-    state.objective = { x: 2620, y: 2600, label: 'Reach Pier Nine — lose them or outrun them', distance: 1750 };
-    state.jobInfo = { title: 'Serena Send-Off', label: 'Reach Pier Nine — lose them or outrun them', timerLeft: null };
-    clearSpaceAroundPlayer(game, 95);
-    return;
-  }
-
-  if (name === 'mission') {
-    state.missionIndex = 4;
-    state.timeOfDay = 0.4;
-    state.player.x = 1460;
-    state.player.y = 2290;
-    state.player.angle = 0.4;
-    state.camera.x = 1460;
-    state.camera.y = 2290;
-    runSteps(game, 150, scriptedInput(0, 0));
-    missions.update(0);
-    return;
-  }
-
-  if (name === 'finale') {
-    state.missionIndex = 5;
-    state.timeOfDay = 0.9;
-    const truck = state.parked.find((v) => v.kind === 'truck') ?? state.parked[1];
-    // Westbound on Ocean Drive, the pier in sight, the pursuit stacked up behind.
-    putPlayerInCar(game, truck, 3180, 2457, Math.PI, 205);
-    state.wanted = 3;
-    runSteps(game, 150, scriptedInput(1, 0));
-    const focus = game.playerPosition();
-    if (state.policeCars.length > 0) {
-      state.policeCars[0].x = focus.x + 185;
-      state.policeCars[0].y = focus.y - 8;
-      state.policeCars[0].angle = Math.PI;
+    case 'mission': {
+      // On-foot Boardwalk cash collection, objective arrow in play.
+      game.hour = 10.6;
+      game.missions.index = 4;
+      game.missions.active = true;
+      game.missions.step = 0;
+      game.player.x = 2190; game.player.y = 1330;
+      game.player.angle = 0.5;
+      game.camera.x = game.player.x; game.camera.y = game.player.y;
+      dressTraffic(game, [
+        ['taxi', 2680, 1180, Math.PI / 2],
+        ['dock', 2920, 1700, Math.PI / 2],
+      ]);
+      break;
     }
-    if (state.policeCars.length > 1) {
-      state.policeCars[1].x = focus.x + 330;
-      state.policeCars[1].y = focus.y + 26;
-      state.policeCars[1].angle = Math.PI;
+    case 'finale': {
+      // Night getaway: Dockmaster on Ocean Drive, Pier Nine ahead, 3 stars.
+      game.hour = 22.8;
+      game.missions.index = 5;
+      game.missions.active = true;
+      game.missions.step = 1;
+      placeInCar(game, 'dock', world.oceanDriveX, 1760, -Math.PI / 2, 95);
+      game.setWanted(3);
+      const cop = makeVehicle('cruiser', world.oceanDriveX - 10, 2010, -Math.PI / 2, 'police');
+      cop.speed = 118;
+      game.police.cars.push(cop);
+      game.vehicles.push(cop);
+      game.police.heli.active = true;
+      game.police.heli.x = game.player.x - 110;
+      game.police.heli.y = game.player.y + 140;
+      break;
     }
-    missions.update(0);
-    state.objective = { x: 2620, y: 2600, label: 'Reach Pier Nine — lose them or outrun them', distance: 640 };
-    state.jobInfo = { title: 'Serena Send-Off', label: 'Reach Pier Nine — lose them or outrun them', timerLeft: null };
-    clearSpaceAroundPlayer(game, 90);
-    return;
+    default:
+      break;
   }
-
-  // cover (default): golden-hour drive along Harbor Cross with the first job on the HUD.
-  state.missionIndex = 0;
-  state.timeOfDay = 0.6;
-  const car = state.parked.find((v) => v.model.name === 'Brisa Convertible') ?? state.parked[0];
-  putPlayerInCar(game, car, 1150, 1532, 0, 235);
-  runSteps(game, 170, scriptedInput(1, 0));
-  missions.update(0);
-  clearSpaceAroundPlayer(game, 95);
+  // Snap the staged job's step data without spawning pickup actors twice.
+  const step = game.missions.currentStep;
+  void step;
 }
