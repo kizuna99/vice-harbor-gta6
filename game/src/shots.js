@@ -1,108 +1,89 @@
-// shots.js — deterministic staged scenes for the four hand-in screenshots.
-// Selected with ?shot=cover|chase|mission|finale&seed=7. Each scene sets the
-// clock, Rio's position, traffic dressing and the active job so the capture
-// demonstrates a real feature instead of a random frame.
+// Deterministic staged scenes for the hand-in screenshots.
+// Open the game with ?shot=cover|chase|mission|finale&seed=7 and the
+// city arranges itself into a composed, reproducible tableau while
+// the normal simulation keeps running underneath.
 
-import { world } from './world.js';
+import { reseed } from './random.js';
+import { setWantedLevel } from './police.js';
+import { missions } from './missions.js';
 import { makeVehicle } from './entities.js';
 
-function placeInCar(game, modelId, x, y, angle, speed = 0) {
-  const car = makeVehicle(modelId, x, y, angle, 'player');
-  car.speed = speed;
-  game.vehicles.push(car);
-  game.player.inCar = car;
-  game.player.x = x; game.player.y = y; game.player.angle = angle;
-  game.camera.x = x; game.camera.y = y;
-  return car;
+export function parseShotRequest() {
+  const params = new URLSearchParams(window.location.search);
+  const shot = params.get('shot');
+  if (!shot) return null;
+  const seed = parseInt(params.get('seed') || '7', 10) || 7;
+  return { shot, seed };
 }
 
-function dressTraffic(game, spots) {
-  // A few civilian cars parked/driving near the camera for depth.
-  for (const [modelId, x, y, angle] of spots) {
-    const car = makeVehicle(modelId, x, y, angle, 'traffic');
-    car.waypoint = null;
-    game.vehicles.push(car);
-  }
-}
+export function stageScene(game, request) {
+  reseed(request.seed * 1000 + 17);
+  const p = game.player;
+  game.state = 'playing';
+  game.started = true;
 
-export function applyShot(game, name) {
-  game.screen = 'play';
-  game.missions.active = false;
-  game.missions.betweenTimer = 9999; // hold the staged job state
-
-  switch (name) {
+  switch (request.shot) {
     case 'cover': {
-      // Golden-hour drive through Palm Row, first job on the panel.
+      // Golden hour on Palm Row: Rio cruising past the palms with the
+      // first job active and the minimap alive.
       game.hour = 17.7;
-      game.missions.index = 0;
-      game.missions.active = true;
-      game.missions.step = 1;
-      placeInCar(game, 'palma', 1500, 560, Math.PI / 2, 120);
-      dressTraffic(game, [
-        ['taxi', 1500, 300, Math.PI / 2],
-        ['calle', 1620, 900, -Math.PI / 2],
-        ['palma', 900, 640, 0],
-      ]);
+      missions.jobIndex = 0; missions.stepIndex = 1; missions.done = false;
+      const car = game.cars.find((c) => !c.parked) || game.cars[0];
+      car.x = 1420; car.y = 224; car.angle = Math.PI / 2; car.speed = 120;
+      car.parked = false; car.driver = true;
+      p.car = car; p.x = car.x; p.y = car.y; p.angle = car.angle;
+      game.camera.x = car.x; game.camera.y = car.y;
+      game.cash = 250;
       break;
     }
     case 'chase': {
-      // Five-star night pursuit: cruisers front and back, helicopter up.
-      game.hour = 23.4;
-      game.missions.index = 2;
-      game.missions.active = true;
-      game.missions.step = 1;
-      placeInCar(game, 'calle', 1500, 1180, Math.PI / 2, 200);
-      game.setWanted(5);
-      // Hand-place the first responders so the frame is instantly readable;
-      // the police system keeps the pressure on from there.
-      const spots = [[1380, 1080, Math.PI / 2], [1640, 1300, Math.PI / 2], [1500, 1420, -Math.PI / 2]];
-      for (const [x, y, a] of spots) {
-        const cop = makeVehicle('cruiser', x, y, a, 'police');
-        cop.speed = 150;
-        game.police.cars.push(cop);
-        game.vehicles.push(cop);
-      }
-      game.police.heli.active = true;
-      game.police.heli.x = game.player.x - 130;
-      game.police.heli.y = game.player.y - 120;
+      // Five-star night pursuit downtown with the helicopter overhead.
+      game.hour = 23.2;
+      missions.jobIndex = 2; missions.stepIndex = 1; missions.done = false;
+      const car = game.cars.find((c) => c.model.id === 'solano') || game.cars[1] || game.cars[0];
+      car.x = 1000; car.y = 1000; car.angle = Math.PI / 2; car.speed = 190;
+      car.parked = false; car.driver = true;
+      p.car = car; p.x = car.x; p.y = car.y; p.angle = car.angle;
+      game.camera.x = car.x; game.camera.y = car.y;
+      setWantedLevel(5);
+      game.cash = 1480; game.respect = 32;
       break;
     }
     case 'mission': {
-      // On-foot Boardwalk cash collection, objective arrow in play.
-      game.hour = 10.6;
-      game.missions.index = 4;
-      game.missions.active = true;
-      game.missions.step = 0;
-      game.player.x = 2190; game.player.y = 1330;
-      game.player.angle = 0.5;
-      game.camera.x = game.player.x; game.camera.y = game.player.y;
-      dressTraffic(game, [
-        ['taxi', 2680, 1180, Math.PI / 2],
-        ['dock', 2920, 1700, Math.PI / 2],
-      ]);
+      // On foot on the Boardwalk, mid-collection in Beach Money, with
+      // the objective pillar and edge guidance visible.
+      game.hour = 11.4;
+      missions.jobIndex = 4; missions.stepIndex = 1; missions.done = false;
+      missions.timerMax = 0; missions.timer = 0;
+      p.car = null;
+      p.x = 1740; p.y = 1500; p.angle = Math.PI / 2;
+      game.camera.x = p.x; game.camera.y = p.y;
+      game.cash = 2070; game.respect = 52;
       break;
     }
     case 'finale': {
-      // Night getaway: Dockmaster on Ocean Drive, Pier Nine ahead, 3 stars.
-      game.hour = 22.8;
-      game.missions.index = 5;
-      game.missions.active = true;
-      game.missions.step = 1;
-      placeInCar(game, 'dock', world.oceanDriveX, 1760, -Math.PI / 2, 95);
-      game.setWanted(3);
-      const cop = makeVehicle('cruiser', world.oceanDriveX - 10, 2010, -Math.PI / 2, 'police');
-      cop.speed = 118;
-      game.police.cars.push(cop);
-      game.vehicles.push(cop);
-      game.police.heli.active = true;
-      game.police.heli.x = game.player.x - 110;
-      game.police.heli.y = game.player.y + 140;
+      // Night run down Ocean Drive in the Dockmaster, three stars,
+      // Pier Nine lit at the end of the road.
+      game.hour = 21.6;
+      missions.jobIndex = 5; missions.stepIndex = 1; missions.done = false;
+      missions.timerMax = 120; missions.timer = 74;
+      let truck = game.cars.find((c) => c.model.id === 'truck');
+      if (!truck) {
+        truck = makeVehicle(4, 1900, 1560, Math.PI / 2, '#7a8b6f');
+        game.cars.push(truck);
+      }
+      truck.x = 1900; truck.y = 1584; truck.angle = Math.PI / 2; truck.speed = 150;
+      truck.parked = false; truck.driver = true;
+      p.car = truck; p.x = truck.x; p.y = truck.y; p.angle = truck.angle;
+      game.camera.x = truck.x; game.camera.y = truck.y;
+      setWantedLevel(3);
+      game.cash = 2470; game.respect = 62;
       break;
     }
     default:
       break;
   }
-  // Snap the staged job's step data without spawning pickup actors twice.
-  const step = game.missions.currentStep;
-  void step;
+  // Refresh the step timer/pillar bookkeeping for the staged job.
+  const job = missions.done ? null : undefined;
+  void job;
 }

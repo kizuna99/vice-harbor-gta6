@@ -1,87 +1,85 @@
-// input.js — keyboard, mouse and touch input in one place.
-// The simulation only ever asks this module two questions: "is it held?"
-// and "was it just pressed this frame?" — which keeps game logic testable.
+// Keyboard, mouse and touch input.
+// A single state object the simulation samples each tick; edge-triggered
+// actions are exposed through a small pressed-set that game code drains.
 
-export class Input {
-  constructor() {
-    this.down = new Set();
-    this.pressed = new Set();
-    this.touchSeen = false;
-    this.touchMove = { x: 0, y: 0 };
-    this.touchFlags = { action: false, brake: false };
-    this.clickPunch = false;
-    this._bound = false;
-  }
+export const keys = Object.create(null);
+export const pressed = new Set();
 
-  attach(canvas) {
-    if (this._bound) return;
-    this._bound = true;
-    window.addEventListener('keydown', (e) => {
-      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
-      if (!e.repeat) this.pressed.add(e.code);
-      this.down.add(e.code);
-    });
-    window.addEventListener('keyup', (e) => this.down.delete(e.code));
-    window.addEventListener('blur', () => { this.down.clear(); });
-    canvas.addEventListener('pointerdown', () => { this.clickPunch = true; });
-    window.addEventListener('touchstart', () => { this.touchSeen = true; }, { passive: true });
-  }
+const ACTION_KEYS = new Set([
+  'KeyE', 'KeyF', 'Enter', 'Space', 'KeyJ', 'KeyH', 'KeyN',
+  'KeyR', 'KeyP', 'KeyM', 'Escape',
+]);
 
-  // Bind the on-screen buttons rendered by index.html. Buttons carry a
-  // data-key (virtual key code) or data-move (direction) attribute.
-  bindTouchButtons(root) {
-    if (!root) return;
-    const press = (el, on, off) => {
-      el.addEventListener('pointerdown', (e) => { e.preventDefault(); this.touchSeen = true; on(); });
-      el.addEventListener('pointerup', off);
-      el.addEventListener('pointerleave', off);
-      el.addEventListener('pointercancel', off);
-    };
-    root.querySelectorAll('[data-vkey]').forEach((el) => {
-      const code = el.getAttribute('data-vkey');
-      press(el, () => { this.down.add(code); this.pressed.add(code); }, () => this.down.delete(code));
-    });
-    root.querySelectorAll('[data-vmove]').forEach((el) => {
-      const dir = el.getAttribute('data-vmove');
-      press(el, () => {
-        if (dir === 'up') this.touchMove.y = -1;
-        if (dir === 'down') this.touchMove.y = 1;
-        if (dir === 'left') this.touchMove.x = -1;
-        if (dir === 'right') this.touchMove.x = 1;
-      }, () => {
-        if (dir === 'up' || dir === 'down') this.touchMove.y = 0;
-        if (dir === 'left' || dir === 'right') this.touchMove.x = 0;
-      });
-    });
-  }
+let touchSeen = false;
+export function touchWasSeen() { return touchSeen; }
 
-  isDown(...codes) { return codes.some((c) => this.down.has(c)); }
-  wasPressed(...codes) { return codes.some((c) => this.pressed.has(c)); }
+export function initInput(canvas) {
+  window.addEventListener('keydown', (e) => {
+    if (!keys[e.code]) {
+      keys[e.code] = true;
+      if (ACTION_KEYS.has(e.code)) pressed.add(e.code);
+    }
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) {
+      e.preventDefault();
+    }
+  });
+  window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+  window.addEventListener('blur', () => {
+    for (const k of Object.keys(keys)) keys[k] = false;
+  });
 
-  // Movement axes in [-1, 1], merging keyboard and touch.
-  moveX() {
-    let x = this.touchMove.x;
-    if (this.isDown('KeyA', 'ArrowLeft')) x -= 1;
-    if (this.isDown('KeyD', 'ArrowRight')) x += 1;
-    return Math.max(-1, Math.min(1, x));
-  }
-  moveY() {
-    let y = this.touchMove.y;
-    if (this.isDown('KeyW', 'ArrowUp')) y -= 1;
-    if (this.isDown('KeyS', 'ArrowDown')) y += 1;
-    return Math.max(-1, Math.min(1, y));
-  }
+  canvas.addEventListener('pointerdown', () => {
+    pressed.add('MousePunch');
+  });
 
-  // Call once at the end of each simulation frame.
-  endFrame() {
-    this.pressed.clear();
-    this.clickPunch = false;
-  }
+  // Touch buttons: shown after the first touch anywhere on the page.
+  window.addEventListener('touchstart', () => {
+    touchSeen = true;
+    document.body.classList.add('has-touch');
+  }, { passive: true });
 
-  // Test hooks: the headless playtest drives the game through these.
-  pressKey(code) { this.down.add(code); this.pressed.add(code); }
-  releaseKey(code) { this.down.delete(code); }
-  clearAll() { this.down.clear(); this.pressed.clear(); }
+  bindTouchButtons();
 }
 
-export const input = new Input();
+function bindTouchButtons() {
+  const map = {
+    'btn-up': 'ArrowUp', 'btn-down': 'ArrowDown',
+    'btn-left': 'ArrowLeft', 'btn-right': 'ArrowRight',
+    'btn-act': 'KeyE', 'btn-punch': 'KeyJ', 'btn-brake': 'Space',
+  };
+  for (const [id, code] of Object.entries(map)) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    const on = (e) => {
+      e.preventDefault();
+      touchSeen = true;
+      document.body.classList.add('has-touch');
+      if (!keys[code]) { keys[code] = true; pressed.add(code); }
+    };
+    const off = (e) => { e.preventDefault(); keys[code] = false; };
+    el.addEventListener('touchstart', on, { passive: false });
+    el.addEventListener('touchend', off, { passive: false });
+    el.addEventListener('touchcancel', off, { passive: false });
+    el.addEventListener('mousedown', on);
+    el.addEventListener('mouseup', off);
+    el.addEventListener('mouseleave', off);
+  }
+}
+
+export function axisX() {
+  return (keys['KeyD'] || keys['ArrowRight'] ? 1 : 0) - (keys['KeyA'] || keys['ArrowLeft'] ? 1 : 0);
+}
+export function axisY() {
+  return (keys['KeyS'] || keys['ArrowDown'] ? 1 : 0) - (keys['KeyW'] || keys['ArrowUp'] ? 1 : 0);
+}
+export function sprinting() {
+  return !!(keys['ShiftLeft'] || keys['ShiftRight']);
+}
+export function consume(code) {
+  if (pressed.has(code)) { pressed.delete(code); return true; }
+  return false;
+}
+export function anyPressed(...codes) {
+  for (const c of codes) if (consume(c)) return true;
+  return false;
+}

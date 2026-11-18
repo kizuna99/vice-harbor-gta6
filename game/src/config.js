@@ -1,82 +1,71 @@
-// config.js — Vice Harbor: Port Serena — central tuning constants.
-// Every number that shapes balance lives here so the other modules stay
-// focused on behaviour instead of magic values.
+// Vice Harbor — Port Serena : central tuning table
+// Every balance number for the city lives here so the rest of the code
+// can stay focused on behaviour instead of magic constants.
 
-export const CFG = {
-  worldW: 3200,
-  worldH: 2400,
-  roadW: 84,
-  laneOffset: 21,
-  tile: 40,
+export const WORLD = {
+  width: 3200,
+  height: 2400,
+  roadGap: 400,          // distance between avenues
+  roadWidth: 92,
+  blockSize: 308,        // roadGap - roadWidth
+};
 
-  playerWalkSpeed: 168,
-  playerSprintSpeed: 262,
-  playerRadius: 11,
-  playerHealth: 100,
+export const DISTRICTS = [
+  { id: 'oldtown',   name: 'Old Town',          x: 0,    y: 0,    w: 1100, h: 900,  tint: '#3a2f28' },
+  { id: 'palmrow',   name: 'Palm Row',          x: 1100, y: 0,    w: 1000, h: 900,  tint: '#2e3b2a' },
+  { id: 'university',name: 'University Quarter',x: 2100, y: 0,    w: 1100, h: 900,  tint: '#2b3040' },
+  { id: 'marina',    name: 'Serena Marina',     x: 0,    y: 900,  w: 1100, h: 750,  tint: '#24343e' },
+  { id: 'boardwalk', name: 'Boardwalk',         x: 1100, y: 900,  w: 1000, h: 750,  tint: '#3d3424' },
+  { id: 'docks',     name: 'Port Docks',        x: 2100, y: 900,  w: 1100, h: 750,  tint: '#33302a' },
+];
 
-  trafficCount: 26,
-  parkedCount: 30,
-  pedCount: 34,
+// Six drivable models. topSpeed in px/s, accel in px/s^2.
+export const VEHICLES = [
+  { id: 'calle',    name: 'Calle Coupe',      w: 34, h: 62, topSpeed: 300, accel: 260, grip: 0.92, colors: ['#c94f6d', '#e07a3f', '#4f7dc9', '#f2d24b'] },
+  { id: 'solano',   name: 'Solano GT',        w: 36, h: 66, topSpeed: 380, accel: 340, grip: 0.94, colors: ['#d92632', '#111418', '#f5f5f0', '#ffb400'] },
+  { id: 'palma',    name: 'Palma Sedan',      w: 36, h: 64, topSpeed: 260, accel: 210, grip: 0.90, colors: ['#8fa3b8', '#5b6b7a', '#d9d9d9', '#2f4f4f'] },
+  { id: 'taxi',     name: 'Harbor Taxi',      w: 36, h: 64, topSpeed: 270, accel: 225, grip: 0.90, colors: ['#f7c948'] },
+  { id: 'truck',    name: 'Dockmaster Truck', w: 44, h: 88, topSpeed: 215, accel: 170, grip: 0.86, colors: ['#7a8b6f', '#a65e2e', '#546e7a'] },
+  { id: 'cruiser',  name: 'Serena Cruiser',   w: 38, h: 66, topSpeed: 330, accel: 300, grip: 0.93, colors: ['#f2f2f2'], police: true },
+];
 
-  dayLengthSec: 240, // one full Port Serena day
-  startHour: 16.2,   // golden afternoon when a fresh game boots
-
-  wantedDecayPerSec: 4.5,
-  arrestRange: 46,
+export const WANTED = {
+  // heat points needed to reach each star level (index = stars)
+  thresholds: [0, 30, 80, 150, 240, 360],
+  decayPerSec: 4,        // only while unseen
+  unseenGraceSec: 2.5,
+  policeCarsByStar: [0, 1, 2, 3, 4, 6],
+  footCopsByStar:   [0, 0, 1, 2, 3, 4],
+  heliFromStar: 3,
+  arrestRadius: 46,
   arrestFillPerSec: 0.55,
   arrestDrainPerSec: 0.8,
-
-  clinicFeeRate: 0.10, // Harbor Clinic takes 10% of carried cash
-
-  particleCap: 240,
-  skidCap: 300,
 };
 
-// Six original vehicle models. `top` is px/s, `accel` px/s^2, `grip` is a
-// 0..1 steering feel factor, `seats` matters for the VIP job.
-export const VEHICLE_MODELS = [
-  { id: 'calle',    name: 'Calle Coupe',      top: 330, accel: 210, grip: 0.92, w: 44, h: 22, color: '#e4572e', seats: 2 },
-  { id: 'solano',   name: 'Solano GT',        top: 430, accel: 300, grip: 0.97, w: 46, h: 22, color: '#ffd23f', seats: 2 },
-  { id: 'palma',    name: 'Palma Sedan',      top: 290, accel: 175, grip: 0.88, w: 46, h: 23, color: '#4ea8de', seats: 4 },
-  { id: 'taxi',     name: 'Harbor Taxi',      top: 285, accel: 180, grip: 0.88, w: 46, h: 23, color: '#f4b41a', seats: 4 },
-  { id: 'dock',     name: 'Dockmaster Truck', top: 235, accel: 130, grip: 0.80, w: 58, h: 26, color: '#8d99ae', seats: 2 },
-  { id: 'cruiser',  name: 'Serena Cruiser',   top: 360, accel: 240, grip: 0.93, w: 47, h: 23, color: '#edf2f4', seats: 4, police: true },
-];
-
-export function modelById(id) {
-  return VEHICLE_MODELS.find((m) => m.id === id) || VEHICLE_MODELS[2];
-}
-
-// Wanted thresholds: index = star count. `cars`/`foot` = how many SPD units
-// the simulation tries to keep in play, `speed` multiplies pursuit pace.
-export const WANTED_LEVELS = [
-  { stars: 0, cars: 0, foot: 0, speed: 0.00, label: 'Clean' },
-  { stars: 1, cars: 1, foot: 1, speed: 0.86, label: 'Noticed' },
-  { stars: 2, cars: 2, foot: 2, speed: 0.94, label: 'Pursued' },
-  { stars: 3, cars: 3, foot: 3, speed: 1.00, label: 'Hunted' },
-  { stars: 4, cars: 5, foot: 4, speed: 1.07, label: 'Cornered' },
-  { stars: 5, cars: 7, foot: 5, speed: 1.14, label: 'Citywide Manhunt' },
-];
-
-// Heat points handed out per crime. Heat converts to stars in police.js.
-export const HEAT = {
-  stealCar: 22,
-  stealMovingCar: 34,
-  punchPed: 16,
-  punchOfficer: 30,
-  hitPedWithCar: 40,
-  hitPoliceCar: 26,
-  propertyHit: 6,
+export const CRIME_HEAT = {
+  punch: 12,
+  stealCar: 35,
+  hitPed: 45,
+  hitCar: 10,
+  recklessSpeed: 2, // per second over threshold near a cop
 };
 
-// Cash / respect paid by each of the six story jobs, in order.
-export const MISSION_REWARDS = [
-  { cash: 150, respect: 5 },
-  { cash: 300, respect: 10 },
-  { cash: 450, respect: 14 },
-  { cash: 600, respect: 18 },
-  { cash: 750, respect: 22 },
-  { cash: 1200, respect: 35 },
-];
+export const MISSION_REWARDS = {
+  cash:   [220, 380, 450, 520, 400, 700],
+  respect:[6, 10, 12, 14, 10, 20],
+};
 
-export const SAVE_KEY = 'vice-harbor-port-serena-v2';
+export const PLAYER = {
+  walkSpeed: 150,
+  sprintSpeed: 235,
+  radius: 11,
+  maxHealth: 100,
+  punchRange: 30,
+  punchCooldown: 0.32,
+  punchDamage: 34,
+};
+
+export const SAVE_KEY = 'vice-harbor-save-v3';
+
+export const DAY_LENGTH_SEC = 240; // one full day-night cycle
+export const START_HOUR = 16.4;     // late afternoon golden light

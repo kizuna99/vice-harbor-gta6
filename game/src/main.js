@@ -1,107 +1,118 @@
-// main.js — boot, fixed-timestep loop, and the public debug handle.
-// The simulation advances in exact 1/60 steps no matter the display rate,
-// with the frame delta clamped so a backgrounded tab can't teleport Rio.
+// Boot + frame loop for Vice Harbor — Port Serena.
+// Fixed-timestep simulation at 60 Hz with an accumulator, render on
+// every animation frame, and a small debug handle for the playtest.
 
-import { Game } from './game.js';
+import { initInput, pressed } from './input.js';
+import { game } from './game.js';
 import { render } from './render.js';
-import { input } from './input.js';
-import { applyShot } from './shots.js';
+import { parseShotRequest, stageScene } from './shots.js';
+import { police, setWantedLevel } from './police.js';
+import { missions } from './missions.js';
+import { districtAt } from './world.js';
+import { audio } from './audio.js';
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
-const game = new Game();
-game._buttons = [];
 
-input.attach(canvas);
-input.bindTouchButtons(document.getElementById('touch'));
+function fitCanvas() {
+  // Internal resolution stays 960x600; CSS stretches it to the screen.
+  canvas.width = 960;
+  canvas.height = 600;
+}
+fitCanvas();
 
-// Staged screenshot mode boots straight into the scene.
-const params = new URLSearchParams(window.location.search);
-const shot = params.get('shot');
-if (shot) {
-  applyShot(game, shot);
-} else {
-  game.screen = 'title';
+game.init(7);
+if (game.hasSave()) game.load();
+
+initInput(canvas);
+
+const shotRequest = parseShotRequest();
+if (shotRequest) {
+  game.startGame(true);
+  stageScene(game, shotRequest);
 }
 
-// Title / pause keyboard flow (kept out of Input so endFrame clearing in
-// the simulation can never swallow a menu key).
-window.addEventListener('keydown', (e) => {
-  if (game.screen === 'title' && (e.code === 'Enter' || e.code === 'Space')) {
-    game.startGame(false);
-  } else if (game.screen === 'play' && (e.code === 'KeyP' || e.code === 'Escape')) {
-    game.screen = 'pause';
-  } else if (game.screen === 'pause' && (e.code === 'KeyP' || e.code === 'Escape' || e.code === 'Enter')) {
-    game.screen = 'play';
-  }
-});
-
-// Title buttons are drawn by the renderer into game._buttons each frame.
+// Title-screen buttons + first-gesture audio unlock.
 canvas.addEventListener('pointerdown', (e) => {
-  game.audio.start();
-  if (game.screen !== 'title') return;
+  audio.init();
+  audio.resume();
+  if (game.state !== 'title') return;
   const rect = canvas.getBoundingClientRect();
-  const x = ((e.clientX - rect.left) / rect.width) * canvas.width;
-  const y = ((e.clientY - rect.top) / rect.height) * canvas.height;
-  for (const b of game._buttons || []) {
-    if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
-      game.startGame(b.id === 'continue');
+  const mx = ((e.clientX - rect.left) / rect.width) * 960;
+  const my = ((e.clientY - rect.top) / rect.height) * 600;
+  for (const b of game.uiButtons || []) {
+    if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
+      if (b.id === 'play') game.startGame(true);
+      if (b.id === 'continue') game.startGame(false);
     }
   }
 });
-window.addEventListener('pointerdown', () => game.audio.start(), { once: true });
+window.addEventListener('keydown', (e) => {
+  audio.init();
+  audio.resume();
+  if (game.state === 'title' && (e.code === 'Enter' || e.code === 'Space')) {
+    game.startGame(!game.hasSave() ? true : false);
+    pressed.delete(e.code);
+  } else if (game.state === 'paused' && (e.code === 'KeyP' || e.code === 'Escape')) {
+    game.resume();
+    pressed.delete(e.code);
+  }
+});
 
-// Debug / playtest handle — the headless checks drive the game through it.
-window.ViceHarbor = {
-  game,
-  input,
-  getState: () => game.getState(),
-  startGame: (useSave = false) => game.startGame(useSave),
-  setWanted: (n) => game.setWanted(n),
-  save: () => game.save(),
-  load: () => game.load(),
-  getSaveRaw: () => { try { return localStorage.getItem('vice-harbor-port-serena-v2'); } catch { return null; } },
-};
-
-const STEP = 1 / 60;
+// Fixed-step loop.
 let last = performance.now();
-let acc = 0;
+let accumulator = 0;
+const STEP = 1 / 60;
 let fpsFrames = 0;
 let fpsTime = 0;
 
 function frame(now) {
   requestAnimationFrame(frame);
-  let delta = (now - last) / 1000;
+  let dt = (now - last) / 1000;
   last = now;
-  if (delta > 0.1) delta = 0.1; // clamp: no physics explosions after a stall
-  if (delta < 0) delta = 0;
+  if (dt > 0.25) dt = 0.25;
+  accumulator += dt;
 
   fpsFrames++;
-  fpsTime += delta;
+  fpsTime += dt;
   if (fpsTime >= 0.5) {
-    game.fps = fpsFrames / fpsTime;
-    fpsFrames = 0; fpsTime = 0;
+    game.fps = Math.round(fpsFrames / fpsTime);
+    fpsFrames = 0;
+    fpsTime = 0;
   }
 
-  if (game.screen === 'play' || game.screen === 'busted' || game.screen === 'wasted') {
-    acc += delta;
-    let steps = 0;
-    while (acc >= STEP && steps < 5) {
-      game.update(STEP);
-      acc -= STEP;
-      steps++;
-    }
-    if (steps === 5) acc = 0;
-  } else {
-    // Menus still tick the clock hands and clear per-frame input.
-    game.time += delta;
-    input.endFrame();
+  while (accumulator >= STEP) {
+    game.step(STEP);
+    accumulator -= STEP;
   }
-
-  // Touch controls appear once a touch has actually happened.
-  const touchEl = document.getElementById('touch');
-  if (touchEl && input.touchSeen) touchEl.classList.add('on');
-
-  render(game, ctx, canvas.width, canvas.height);
+  render(ctx, game);
 }
 requestAnimationFrame(frame);
+
+// Debug / playtest handle.
+window.ViceHarbor = {
+  getState() {
+    const p = game.player;
+    return {
+      cash: game.cash,
+      respect: game.respect,
+      wanted: police.stars,
+      vehicles: game.cars.length,
+      peds: game.peds.length,
+      policeCars: police.cars.length,
+      helicopter: !!police.heli,
+      fps: game.fps,
+      district: districtAt(p.x, p.y).name,
+      jobIndex: missions.jobIndex,
+      jobDone: missions.done,
+      inCar: !!p.car,
+      health: Math.round(p.health),
+      state: game.state,
+      hour: game.hour,
+    };
+  },
+  startGame() { game.startGame(true); },
+  setWanted(n) { setWantedLevel(n); },
+  save() { game.save(); },
+  game,
+};

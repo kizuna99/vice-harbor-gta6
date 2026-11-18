@@ -1,249 +1,211 @@
-// missions.js — six story jobs for Rio, all given by his Auntie Bea.
-// Jobs run in sequence. Each job is a list of steps; a step is done when
-// Rio reaches its marker the right way (on foot, in any car, or in one
-// specific car). The renderer draws the marker, the minimap blip, the
-// edge arrow and a light pillar from getObjective().
+// Six jobs from fixer Auntie Bea, played strictly in sequence.
+// Every job is a list of steps; each step has a world target that the
+// HUD arrow, the minimap and a light pillar all point at. Timed steps
+// reset themselves on timeout — the job itself is never lost.
 
 import { MISSION_REWARDS } from './config.js';
-import { dist } from './random.js';
-import { world } from './world.js';
-import { makeVehicle, makePed } from './entities.js';
+import { makeVehicle } from './entities.js';
 
-const A = world.anchors;
+export const JOBS = [
+  {
+    title: 'First Run for Bea',
+    brief: 'Take the package from Bea\'s Kitchen to the Ferry Office at Serena Marina.',
+    steps: [
+      { label: 'Pick up the package at Bea\'s Kitchen', x: 1250, y: 430, r: 44, mode: 'foot' },
+      { label: 'Deliver to the Ferry Office, Serena Marina', x: 620, y: 1180, r: 52, mode: 'any' },
+    ],
+  },
+  {
+    title: 'Neon Rush',
+    brief: 'Hit all five checkpoints before the clock runs out. Dusk racing, Bea style.',
+    steps: [
+      { label: 'Checkpoint 1 — Palm Row lights', x: 1400, y: 200, r: 56, mode: 'car', timer: 95 },
+      { label: 'Checkpoint 2 — University gate', x: 2600, y: 200, r: 56, mode: 'car' },
+      { label: 'Checkpoint 3 — Customs House', x: 2600, y: 1000, r: 56, mode: 'car' },
+      { label: 'Checkpoint 4 — Boardwalk Fries', x: 1400, y: 1000, r: 56, mode: 'car' },
+      { label: 'Finish at Bea\'s Kitchen', x: 1250, y: 430, r: 56, mode: 'car' },
+    ],
+  },
+  {
+    title: 'Hot Solano',
+    brief: 'A marked Solano GT is parked near the University. Take it to Warehouse 7 in the docks.',
+    steps: [
+      { label: 'Steal the marked Solano GT', x: 2380, y: 560, r: 60, mode: 'any', spawnSolano: true, needMissionCar: true },
+      { label: 'Deliver the Solano to Warehouse 7', x: 2760, y: 1330, r: 58, mode: 'car', needModel: 'solano' },
+    ],
+  },
+  {
+    title: 'VIP to the Marina',
+    brief: 'Singer Lulu Mar is waiting at the Hotel Palma. Ferry her to Serena Marina, fast and intact.',
+    steps: [
+      { label: 'Pick up Lulu Mar at Hotel Palma', x: 1560, y: 430, r: 52, mode: 'car' },
+      { label: 'Drop Lulu at Serena Marina', x: 700, y: 1250, r: 56, mode: 'car', timer: 110, passenger: true },
+    ],
+  },
+  {
+    title: 'Beach Money',
+    brief: 'Three debtors left cash along the Boardwalk. Collect all three on foot.',
+    steps: [
+      { label: 'Collect cash — Shell Shop', x: 1500, y: 1520, r: 36, mode: 'foot' },
+      { label: 'Collect cash — Ocean Drive palms', x: 1900, y: 1560, r: 36, mode: 'foot' },
+      { label: 'Collect cash — Boardwalk west end', x: 1180, y: 1500, r: 36, mode: 'foot' },
+    ],
+  },
+  {
+    title: 'Serena Send-Off',
+    brief: 'Grab the Dockmaster at the Port Docks and make the run to the end of Pier Nine.',
+    steps: [
+      { label: 'Reach the Port Docks loading yard', x: 2900, y: 1420, r: 58, mode: 'any' },
+      { label: 'Getaway: reach the end of Pier Nine', x: 2425, y: 1980, r: 62, mode: 'car', timer: 120, heatOnStart: 90 },
+    ],
+  },
+];
 
-function jobDefs() {
-  return [
-    {
-      title: 'First Run for Bea',
-      brief: "Pick up Bea's parcel and drive it to Serena Marina.",
-      steps: [
-        { kind: 'goto', x: A.beaShop.x, y: A.beaShop.y + 70, r: 60, label: "Auntie Bea's — collect the parcel" },
-        { kind: 'drive', x: A.marina.x, y: A.marina.y, r: 80, label: 'Drive the parcel to Serena Marina' },
-      ],
-    },
-    {
-      title: 'Neon Rush',
-      brief: 'Five checkpoints across Palm Row before the clock dies. Bea forces dusk — the neon is the point.',
-      timer: 165, forceHour: 19.3,
-      steps: [1500, 2100, 2680, 2100, 1500].map((x, i) => ({
-        kind: 'drive', x, y: [300, 900, 1500, 2050, 1500][i], r: 74,
-        label: `Checkpoint ${i + 1} of 5`,
-      })),
-    },
-    {
-      title: 'Hot Solano',
-      brief: 'A yellow Solano GT is parked up in the University Quarter. Take it. Deliver it to the Port Docks gate.',
-      steps: [
-        { kind: 'steal', x: 2620, y: 420, r: 60, label: 'Steal the marked Solano GT', carAt: { x: 2620, y: 420 } },
-        { kind: 'drive', x: A.docks.x, y: A.docks.y, r: 90, label: 'Deliver the Solano GT to the Port Docks gate', needsMissionCar: true },
-      ],
-    },
-    {
-      title: 'VIP to the Marina',
-      brief: 'Singer Lulu Mar is waiting at the Boardwalk. Get her to Serena Marina before her set starts.',
-      timer: 130,
-      steps: [
-        { kind: 'pickup', x: 1800, y: 1560, r: 56, label: 'Pick up Lulu Mar', passengerAt: { x: 1800, y: 1560 } },
-        { kind: 'drive', x: A.marina.x, y: A.marina.y, r: 85, label: 'Drive Lulu Mar to Serena Marina', needsPassenger: true },
-      ],
-    },
-    {
-      title: 'Beach Money',
-      brief: 'Three debtors left cash along the Boardwalk. Collect all three — on foot, quiet-like.',
-      steps: [0, 1, 2].map((i) => ({
-        kind: 'collect', x: [2280, 2360, 2300][i], y: [1300, 1630, 1960][i], r: 42,
-        label: `Collect cash drop ${i + 1} of 3 (on foot)`,
-      })),
-    },
-    {
-      title: 'Serena Send-Off',
-      brief: 'Last job. Take the Dockmaster at the Port Docks and run it to Pier Nine. The SPD will object.',
-      heatOnStart: 70,
-      steps: [
-        { kind: 'goto', x: A.docks.x, y: A.docks.y, r: 80, label: 'Reach the Port Docks gate' },
-        { kind: 'drive', x: A.pierNine.x, y: A.pierNine.y, r: 95, label: 'Getaway: reach Pier Nine', needsAnyCar: true },
-      ],
-    },
-  ];
+export const missions = {
+  jobIndex: 0,
+  stepIndex: 0,
+  timer: 0,
+  timerMax: 0,
+  done: false,
+  solanoCar: null,
+  passengerAboard: false,
+  message: '',
+  messageT: 0,
+};
+
+export function currentStep() {
+  if (missions.done) return null;
+  const job = JOBS[missions.jobIndex];
+  return job ? job.steps[missions.stepIndex] : null;
 }
 
-export class Missions {
-  constructor() {
-    this.defs = jobDefs();
-    this.index = 0;      // 0..5 active job, 6 = story complete
-    this.step = 0;
-    this.timer = null;   // seconds left, when the job is timed
-    this.active = false;
-    this.missionCar = null;
-    this.passenger = null;
-    this.banner = '';
-    this.bannerTimer = 0;
-    this.betweenTimer = 0;
-  }
+export function currentJob() {
+  return missions.done ? null : JOBS[missions.jobIndex];
+}
 
-  get current() { return this.index < this.defs.length ? this.defs[this.index] : null; }
-  get currentStep() {
-    const job = this.current;
-    return job ? job.steps[this.step] || null : null;
+export function startJobStep(game) {
+  const step = currentStep();
+  if (!step) return;
+  missions.timer = step.timer || 0;
+  missions.timerMax = step.timer || 0;
+  if (step.spawnSolano && !missions.solanoCar) {
+    const car = makeVehicle(1, step.x, step.y, Math.PI / 2, '#d92632');
+    car.parked = true; car.driver = false;
+    car.isMissionCar = true;
+    missions.solanoCar = car;
+    game.cars.push(car);
   }
+  if (step.heatOnStart) game.addHeat(step.heatOnStart);
+}
 
-  activate(game) {
-    const job = this.current;
-    if (!job) { this.active = false; return; }
-    this.active = true;
-    this.step = 0;
-    this.timer = job.timer ?? null;
-    this.missionCar = null;
-    this.passenger = null;
-    if (job.forceHour !== undefined) game.hour = job.forceHour;
-    if (job.heatOnStart) game.police.addHeat(job.heatOnStart);
-    this.setupStep(game);
-    this.showBanner(game, `${job.title} — ${job.brief}`);
-  }
+export function beginMissions(game) {
+  missions.jobIndex = 0;
+  missions.stepIndex = 0;
+  missions.done = false;
+  missions.solanoCar = null;
+  missions.passengerAboard = false;
+  startJobStep(game);
+  const job = currentJob();
+  if (job) showMessage(game, `JOB: ${job.title} — ${job.brief}`, 6);
+}
 
-  setupStep(game) {
-    const s = this.currentStep;
-    if (!s) return;
-    if (s.kind === 'steal' && s.carAt && !this.missionCar) {
-      const car = makeVehicle('solano', s.carAt.x, s.carAt.y, Math.PI / 2, 'mission');
-      this.missionCar = car;
-      game.vehicles.push(car);
-    }
-    if (s.kind === 'pickup' && s.passengerAt && !this.passenger) {
-      const ped = makePed(s.passengerAt.x, s.passengerAt.y, game.rng);
-      ped.color = '#ff5d8f';
-      ped.state = 'wait';
-      this.passenger = ped;
-      game.peds.push(ped);
-    }
-    // The Send-Off getaway truck waits at the docks from job start.
-    if (this.current && this.current.title === 'Serena Send-Off' && this.step === 0 && !this.missionCar) {
-      const truck = makeVehicle('dock', world.anchors.docks.x + 60, world.anchors.docks.y + 40, 0, 'mission');
-      this.missionCar = truck;
-      game.vehicles.push(truck);
-    }
-  }
+export function showMessage(game, text, secs) {
+  missions.message = text;
+  missions.messageT = secs || 4;
+  game.bannerText = text;
+  game.bannerT = secs || 4;
+}
 
-  showBanner(game, text) {
-    this.banner = text;
-    this.bannerTimer = 4.5;
-    game.message = text;
-    game.messageTimer = 4.5;
-  }
+function stepModeOk(step, game) {
+  if (step.mode === 'car') return !!game.player.car;
+  if (step.mode === 'foot') return !game.player.car;
+  return true;
+}
 
-  getObjective() {
-    const s = this.currentStep;
-    if (!this.active || !s) return null;
-    // While stealing, the objective is the car itself if it has moved.
-    if (s.kind === 'steal' && this.missionCar) {
-      return { x: this.missionCar.x, y: this.missionCar.y, label: s.label, r: s.r };
-    }
-    return { x: s.x, y: s.y, label: s.label, r: s.r };
-  }
+export function updateMissions(dt, game) {
+  missions.messageT = Math.max(0, missions.messageT - dt);
+  const step = currentStep();
+  if (!step || game.player.dead || game.player.busted) return;
 
-  resetCurrentStep(game) {
-    // Timeout / busted / wasted: restart the current step, keep the job.
-    const job = this.current;
-    if (!job) return;
-    this.timer = job.timer ?? null;
-    if (this.passenger) {
-      this.passenger.isPassenger = false;
-      this.passenger.state = 'stroll';
-      this.passenger = null;
-      // The pickup step will re-spawn her.
-      if (this.currentStep && this.currentStep.kind !== 'pickup') this.step = 0;
-      else this.setupStep(game);
-    }
-    if (job.forceHour !== undefined) game.hour = job.forceHour;
-  }
-
-  completeJob(game) {
-    const reward = MISSION_REWARDS[this.index];
-    game.player.cash += reward.cash;
-    game.player.respect += reward.respect;
-    game.stats.jobsDone++;
-    game.audio?.sfx('success');
-    this.showBanner(game, `Job complete: +$${reward.cash}, +${reward.respect} respect`);
-    this.index++;
-    this.active = false;
-    this.missionCar = null;
-    if (this.passenger) { this.passenger.isPassenger = false; this.passenger.state = 'stroll'; this.passenger = null; }
-    game.save();
-    this.betweenTimer = 2.5; // breather, then the next job activates
-  }
-
-  update(dt, game) {
-    if (this.bannerTimer > 0) this.bannerTimer -= dt;
-    if (!this.active) {
-      if (this.index < this.defs.length) {
-        this.betweenTimer -= dt;
-        if (this.betweenTimer <= 0) this.activate(game);
-      }
+  // Countdown for timed steps; expiry restarts just this step.
+  if (missions.timerMax > 0) {
+    missions.timer -= dt;
+    if (missions.timer <= 0) {
+      showMessage(game, 'Out of time — the step resets. Go again.', 4);
+      missions.timer = missions.timerMax;
+      game.audio?.fail();
       return;
     }
-    const job = this.current;
-    const s = this.currentStep;
-    if (!job || !s) { this.completeJob(game); return; }
+  }
 
-    if (this.timer !== null) {
-      this.timer -= dt;
-      if (this.timer <= 0) {
-        this.showBanner(game, 'Out of time — the job resets. Try again.');
-        game.audio?.sfx('fail');
-        this.step = 0;
-        this.timer = job.timer ?? null;
-        if (job.forceHour !== undefined) game.hour = job.forceHour;
-        this.setupStep(game);
-        return;
+  // The Hot Solano delivery insists on the right car.
+  if (step.needModel) {
+    const c = game.player.car;
+    if (!c || c.model.id !== step.needModel) {
+      // If Rio arrives on foot / wrong car near the drop, hint once in a while.
+      const d = Math.hypot(game.player.x - step.x, game.player.y - step.y);
+      if (d < step.r + 30 && game.hintT <= 0) {
+        showMessage(game, 'Warehouse 7 only accepts the Solano GT.', 3);
+        game.hintT = 5;
       }
-    }
-
-    const p = game.player;
-    const obj = this.getObjective();
-    const d = dist(p.x, p.y, obj.x, obj.y);
-    let done = false;
-
-    switch (s.kind) {
-      case 'goto':
-        done = d < s.r;
-        break;
-      case 'drive':
-        if (s.needsMissionCar) done = p.inCar === this.missionCar && d < s.r;
-        else if (s.needsPassenger) done = !!p.passengerAboard && p.inCar && d < s.r;
-        else if (s.needsAnyCar) done = !!p.inCar && d < s.r;
-        else done = !!p.inCar && d < s.r;
-        break;
-      case 'collect':
-        done = !p.inCar && d < s.r;
-        if (done) game.audio?.sfx('pickup');
-        break;
-      case 'steal':
-        done = p.inCar === this.missionCar;
-        break;
-      case 'pickup': {
-        if (d < s.r && this.passenger) {
-          if (p.inCar) {
-            this.passenger.isPassenger = true;
-            p.passengerAboard = true;
-            done = true;
-          } else if (d < 30) {
-            game.message = 'Lulu needs a car — bring one to her.';
-            game.messageTimer = 1.2;
-          }
-        }
-        break;
-      }
-      default:
-        break;
-    }
-
-    if (done) {
-      this.step++;
-      if (this.step >= job.steps.length) this.completeJob(game);
-      else {
-        game.audio?.sfx('pickup');
-        this.setupStep(game);
+      if (!c || c.model.id !== step.needModel) {
+        // Still allow the steal-step logic below to run when relevant.
+        if (!(c && c.isMissionCar)) return;
       }
     }
   }
+
+  if (!stepModeOk(step, game)) return;
+
+  // The steal step only completes once Rio is actually in the Solano.
+  if (step.needMissionCar && game.player.car !== missions.solanoCar) return;
+
+  const px = game.player.car ? game.player.car.x : game.player.x;
+  const py = game.player.car ? game.player.car.y : game.player.y;
+  const d = Math.hypot(px - step.x, py - step.y);
+  if (d > step.r) return;
+
+  // Step complete.
+  game.audio?.pickup();
+  const job = currentJob();
+  missions.stepIndex++;
+
+  if (step.passenger === undefined && currentStep()?.passenger) {
+    missions.passengerAboard = true;
+    showMessage(game, 'Lulu Mar is in. "Marina, darling — and step on it."', 4);
+  }
+
+  if (missions.stepIndex >= job.steps.length) {
+    // Job complete: pay out and roll to the next job.
+    const cash = MISSION_REWARDS.cash[missions.jobIndex];
+    const respect = MISSION_REWARDS.respect[missions.jobIndex];
+    game.cash += cash;
+    game.respect += respect;
+    game.jobsDone++;
+    game.audio?.cashRegister();
+    missions.jobIndex++;
+    missions.stepIndex = 0;
+    missions.passengerAboard = false;
+    if (missions.jobIndex >= JOBS.length) {
+      missions.done = true;
+      showMessage(game, 'All jobs done. Port Serena is yours, Rio. Free roam!', 7);
+    } else {
+      const next = currentJob();
+      showMessage(game, `Job complete: +$${cash}, +${respect} respect. Next: ${next.title}`, 6);
+      startJobStep(game);
+    }
+    game.save();
+  } else {
+    showMessage(game, `Step done. ${currentStep().label}`, 3.5);
+    startJobStep(game);
+    game.save();
+  }
+}
+
+export function objectiveDistance(game) {
+  const step = currentStep();
+  if (!step) return 0;
+  const px = game.player.car ? game.player.car.x : game.player.x;
+  const py = game.player.car ? game.player.car.y : game.player.y;
+  return Math.round(Math.hypot(px - step.x, py - step.y));
 }

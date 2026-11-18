@@ -1,166 +1,176 @@
-// police.js — the Serena Police Department (SPD).
-// Heat is the raw score; stars are derived from it. Units scale with stars,
-// the helicopter joins at 3 stars, and heat only bleeds off while no unit
-// can see Rio — hiding actually works, sprinting down Ocean Drive doesn't.
+// Serena Police Department: wanted heat, pursuit cars, foot officers
+// and the helicopter. Heat only decays while nobody in uniform can see
+// Rio; the arrest meter fills when an officer is close and Rio is slow.
 
-import { CFG, WANTED_LEVELS, HEAT } from './config.js';
-import { clamp, dist, angleLerp } from './random.js';
-import { makeVehicle, makePed, moveCar } from './entities.js';
-import { world } from './world.js';
+import { WANTED, CRIME_HEAT, VEHICLES } from './config.js';
+import { clamp, range, angleLerp } from './random.js';
+import { makeVehicle } from './entities.js';
+import { resolveCollision } from './world.js';
 
-export function starsFromHeat(heat) {
-  if (heat <= 0) return 0;
-  if (heat < 30) return 1;
-  if (heat < 65) return 2;
-  if (heat < 105) return 3;
-  if (heat < 150) return 4;
-  return 5;
+export const police = {
+  heat: 0,
+  stars: 0,
+  cars: [],
+  officers: [],
+  heli: null,
+  unseenT: 0,
+  arrest: 0,       // 0..1
+  flashT: 0,
+};
+
+export function starsForHeat(heat) {
+  let s = 0;
+  for (let i = 1; i < WANTED.thresholds.length; i++) {
+    if (heat >= WANTED.thresholds[i]) s = i;
+  }
+  return s;
 }
 
-export class Police {
-  constructor(rng) {
-    this.rng = rng;
-    this.heat = 0;
-    this.cars = [];     // police vehicles (also mirrored into game.vehicles)
-    this.officers = []; // foot officers (mirrored into game.peds)
-    this.heli = { active: false, x: 0, y: 0, angle: 0, sweep: 0, rotor: 0 };
-    this.seenTimer = 0; // seconds since any unit last saw the player
-    this.spawnCooldown = 0;
-  }
-
-  get wanted() { return starsFromHeat(this.heat); }
-
-  addHeat(points) {
-    this.heat = clamp(this.heat + points, 0, 220);
-  }
-
-  clear() {
-    this.heat = 0;
-    this.seenTimer = 99;
-  }
-
-  // Spawn a unit just off-screen near the player so pursuit feels responsive
-  // without cars popping into view.
-  spawnCar(game) {
-    const p = game.player;
-    const a = this.rng.range(0, Math.PI * 2);
-    const d = 560;
-    const x = clamp(p.x + Math.cos(a) * d, 40, CFG.worldW - 40);
-    const y = clamp(p.y + Math.sin(a) * d, 40, CFG.worldH - 40);
-    // Snap to the nearest road so cruisers arrive on tarmac.
-    let bx = x, by = y, bd = Infinity;
-    for (const pt of world.intersections) {
-      const dd = dist(x, y, pt.x, pt.y);
-      if (dd < bd) { bd = dd; bx = pt.x; by = pt.y; }
-    }
-    const car = makeVehicle('cruiser', bx, by, Math.atan2(p.y - by, p.x - bx), 'police');
-    this.cars.push(car);
-    game.vehicles.push(car);
-    return car;
-  }
-
-  spawnOfficer(game) {
-    const p = game.player;
-    const a = this.rng.range(0, Math.PI * 2);
-    const off = makePed(clamp(p.x + Math.cos(a) * 380, 30, CFG.worldW - 30), clamp(p.y + Math.sin(a) * 380, 30, CFG.worldH - 30), this.rng, 'officer');
-    off.color = '#274690';
-    this.officers.push(off);
-    game.peds.push(off);
-    return off;
-  }
-
-  update(dt, game) {
-    const p = game.player;
-    const level = WANTED_LEVELS[this.wanted];
-    this.spawnCooldown -= dt;
-
-    // Maintain unit counts for the current star level.
-    if (this.wanted > 0 && this.spawnCooldown <= 0) {
-      if (this.cars.length < level.cars) { this.spawnCar(game); this.spawnCooldown = 0.7; }
-      else if (this.officers.length < level.foot) { this.spawnOfficer(game); this.spawnCooldown = 0.7; }
-    }
-    // Despawn far-away excess units when heat drops.
-    if (this.cars.length > level.cars) {
-      const far = this.cars.find((c) => dist(c.x, c.y, p.x, p.y) > 800);
-      if (far) this.removeCar(game, far);
-    }
-    if (this.officers.length > level.foot) {
-      const far = this.officers.find((o) => dist(o.x, o.y, p.x, p.y) > 700);
-      if (far) this.removeOfficer(game, far);
-    }
-
-    // Vision: any unit (or the helicopter) within range refreshes "seen".
-    let seen = false;
-    for (const c of this.cars) if (dist(c.x, c.y, p.x, p.y) < 470) seen = true;
-    for (const o of this.officers) if (dist(o.x, o.y, p.x, p.y) < 300) seen = true;
-    if (this.heli.active) seen = true;
-    if (seen) this.seenTimer = 0; else this.seenTimer += dt;
-
-    // Heat decay — only while unseen, and never while a job crime is fresh.
-    if (this.wanted > 0 && this.seenTimer > 2.2) {
-      this.heat = Math.max(0, this.heat - CFG.wantedDecayPerSec * dt);
-      if (this.heat === 0) this.clearUnits(game);
-    }
-
-    // Pursuit driving: steer at the player, match the star-level pace.
-    for (const car of this.cars) {
-      const targetAngle = Math.atan2(p.y - car.y, p.x - car.x);
-      car.angle = angleLerp(car.angle, targetAngle, clamp(dt * 2.6, 0, 1));
-      const d = dist(car.x, car.y, p.x, p.y);
-      const want = car.model.top * level.speed * (d > 260 ? 1 : 0.72);
-      car.speed += clamp(want - car.speed, -300 * dt, car.model.accel * dt);
-      if (d < 52) car.speed = Math.min(car.speed, 40); // pull alongside, don't orbit
-      moveCar(car, dt);
-    }
-    // Foot officers run at the player; the arrest logic itself lives in
-    // game.js because it needs the player's full state.
-    for (const off of this.officers) {
-      if (off.state === 'down') continue;
-      const d = dist(off.x, off.y, p.x, p.y);
-      const spd = this.wanted >= 4 ? 205 : 178;
-      off.angle = Math.atan2(p.y - off.y, p.x - off.x);
-      if (d > 26) {
-        off.x += Math.cos(off.angle) * spd * dt;
-        off.y += Math.sin(off.angle) * spd * dt;
-        const fixed = world.collideCircle(off.x, off.y, CFG.playerRadius);
-        off.x = fixed.x; off.y = fixed.y;
-      }
-      off.speed = spd;
-    }
-
-    // Helicopter at 3+ stars: hovers offset from the player, searchlight
-    // sweeping — and while it is up, Rio is always "seen".
-    const wantHeli = this.wanted >= 3;
-    if (wantHeli && !this.heli.active) {
-      this.heli.active = true;
-      this.heli.x = p.x - 300; this.heli.y = p.y - 300;
-    }
-    if (!wantHeli) this.heli.active = false;
-    if (this.heli.active) {
-      const hx = p.x + Math.cos(this.heli.sweep * 0.6) * 120;
-      const hy = p.y + Math.sin(this.heli.sweep * 0.6) * 120;
-      this.heli.x += (hx - this.heli.x) * clamp(dt * 1.6, 0, 1);
-      this.heli.y += (hy - this.heli.y) * clamp(dt * 1.6, 0, 1);
-      this.heli.sweep += dt;
-      this.heli.rotor += dt * 40;
-      this.heli.angle = Math.atan2(p.y - this.heli.y, p.x - this.heli.x);
-    }
-  }
-
-  removeCar(game, car) {
-    this.cars = this.cars.filter((c) => c !== car);
-    game.vehicles = game.vehicles.filter((v) => v !== car);
-  }
-  removeOfficer(game, off) {
-    this.officers = this.officers.filter((o) => o !== off);
-    game.peds = game.peds.filter((q) => q !== off);
-  }
-  clearUnits(game) {
-    for (const c of [...this.cars]) this.removeCar(game, c);
-    for (const o of [...this.officers]) this.removeOfficer(game, o);
-    this.heli.active = false;
-  }
-
-  // Crime helpers so call sites read clearly.
-  crime(kind) { if (HEAT[kind]) this.addHeat(HEAT[kind]); }
+export function addHeat(amount, game) {
+  police.heat = clamp(police.heat + amount, 0, WANTED.thresholds[5] + 160);
+  const s = starsForHeat(police.heat);
+  if (s > police.stars && game) game.onWantedRise?.(s);
+  police.stars = s;
 }
+
+export function setWantedLevel(n) {
+  police.stars = clamp(n, 0, 5);
+  police.heat = WANTED.thresholds[police.stars] + (police.stars > 0 ? 4 : 0);
+  if (n === 0) {
+    police.heat = 0;
+    police.arrest = 0;
+    police.cars.length = 0;
+    police.officers.length = 0;
+    police.heli = null;
+  }
+}
+
+export function clearWanted() { setWantedLevel(0); }
+
+function spawnCopCar(player, existing) {
+  // Spawn just outside view, on a road-ish ring around the player.
+  const a = range(0, Math.PI * 2);
+  const d = range(430, 540);
+  const x = clamp(player.x + Math.cos(a) * d, 60, 3140);
+  const y = clamp(player.y + Math.sin(a) * d, 60, 1620);
+  const car = makeVehicle(5, x, y, 0, '#f2f2f2');
+  car.police = true;
+  car.driver = true;
+  existing.push(car);
+  return car;
+}
+
+function spawnOfficer(player) {
+  const a = range(0, Math.PI * 2);
+  return {
+    x: clamp(player.x + Math.cos(a) * 380, 40, 3160),
+    y: clamp(player.y + Math.sin(a) * 380, 40, 1630),
+    angle: 0, speed: 0, state: 'chase',
+  };
+}
+
+export function updatePolice(dt, player, game) {
+  police.flashT += dt * 7;
+  const target = player.car || player;
+  const px = target.x, py = target.y;
+
+  // Maintain force size for the current star level.
+  const wantCars = WANTED.policeCarsByStar[police.stars];
+  const wantFoot = WANTED.footCopsByStar[police.stars];
+  if (police.stars > 0) {
+    while (police.cars.length < wantCars) spawnCopCar(player, police.cars);
+    while (police.officers.length < wantFoot) police.officers.push(spawnOfficer(player));
+  }
+  if (police.cars.length > wantCars) police.cars.length = Math.max(wantCars, 0);
+  if (police.officers.length > wantFoot) police.officers.length = Math.max(wantFoot, 0);
+
+  // Helicopter joins at three stars and above.
+  if (police.stars >= WANTED.heliFromStar) {
+    if (!police.heli) {
+      police.heli = { x: px + 300, y: py - 260, angle: 0, sweep: 0, spotX: px, spotY: py };
+    }
+  } else {
+    police.heli = null;
+  }
+  if (police.heli) {
+    const h = police.heli;
+    h.sweep += dt;
+    // Orbit the target and drag the searchlight across the street.
+    const orbitA = h.sweep * 0.55;
+    const hx = px + Math.cos(orbitA) * 150;
+    const hy = py + Math.sin(orbitA) * 110;
+    h.x += (hx - h.x) * Math.min(1, dt * 2.2);
+    h.y += (hy - h.y) * Math.min(1, dt * 2.2);
+    h.angle = Math.atan2(px - h.x, -(py - h.y));
+    h.spotX = px + Math.sin(h.sweep * 1.7) * 34;
+    h.spotY = py + Math.cos(h.sweep * 1.3) * 26;
+  }
+
+  // Line of sight: any unit within range counts as seeing Rio.
+  let seen = false;
+
+  for (const car of police.cars) {
+    const dx = px - car.x, dy = py - car.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist < 420) seen = true;
+    const wantAngle = Math.atan2(dx, -dy);
+    car.angle = angleLerp(car.angle, wantAngle, Math.min(1, dt * 2.6));
+    const top = VEHICLES[5].topSpeed * (0.82 + police.stars * 0.045);
+    const wantSpeed = dist > 60 ? top : top * 0.25;
+    car.speed += clamp(wantSpeed - car.speed, -300 * dt, VEHICLES[5].accel * dt);
+    car.x += Math.sin(car.angle) * car.speed * dt;
+    car.y += -Math.cos(car.angle) * car.speed * dt;
+    resolveCollision(car, 22);
+    // Ram contact nudges the suspect and chips damage.
+    if (player.car && dist < 44 && game) game.onPoliceRam?.(car);
+  }
+
+  for (const o of police.officers) {
+    const dx = px - o.x, dy = py - o.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist < 300) seen = true;
+    if (dist > 560) { // teleport-catch-up so foot cops stay relevant
+      o.x = px + range(-300, 300); o.y = py + range(-300, 300);
+    }
+    o.angle = Math.atan2(dx, -dy);
+    o.speed = dist > 30 ? 168 : 0;
+    o.x += Math.sin(o.angle) * o.speed * dt;
+    o.y += -Math.cos(o.angle) * o.speed * dt;
+    resolveCollision(o, 10);
+  }
+
+  // Arrest meter: fills when a unit is close and Rio is slow or on foot.
+  const suspectSpeed = player.car ? Math.abs(player.car.speed) : Math.hypot(player.vx || 0, player.vy || 0);
+  let closeUnit = false;
+  for (const car of police.cars) {
+    if (Math.hypot(car.x - px, car.y - py) < WANTED.arrestRadius + 26) closeUnit = true;
+  }
+  for (const o of police.officers) {
+    if (Math.hypot(o.x - px, o.y - py) < WANTED.arrestRadius) closeUnit = true;
+  }
+  if (police.stars > 0 && closeUnit && suspectSpeed < 55) {
+    police.arrest = clamp(police.arrest + WANTED.arrestFillPerSec * dt, 0, 1);
+  } else {
+    police.arrest = clamp(police.arrest - WANTED.arrestDrainPerSec * dt, 0, 1);
+  }
+
+  // Heat bookkeeping.
+  if (seen) {
+    police.unseenT = 0;
+  } else {
+    police.unseenT += dt;
+    if (police.unseenT > WANTED.unseenGraceSec && police.stars > 0) {
+      police.heat = Math.max(0, police.heat - WANTED.decayPerSec * dt);
+      police.stars = starsForHeat(police.heat);
+      if (police.stars === 0) { police.cars.length = 0; police.officers.length = 0; police.heli = null; }
+    }
+  }
+
+  if (police.arrest >= 1 && game) {
+    game.onBusted?.();
+    police.arrest = 0;
+  }
+  return { seen };
+}
+
+export { CRIME_HEAT };
