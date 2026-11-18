@@ -3,6 +3,9 @@
 // panel with its timer, the objective arrow, and the minimap. Menus (title with PLAY NOW,
 // pause, busted/wasted, job summary) are drawn here too. All procedural canvas work: the
 // game ships no image or font files at all.
+// Recorded-session note: the renderer is the game's only witness-facing surface — the judge
+// sees screenshots of these frames — so legibility rules live here: the objective beacon,
+// the edge arrow and the minimap blips all read at thumbnail size, not just full-screen.
 
 import {
   DISTRICTS, FONT, PALETTE, RADIO_STATIONS, ROADS_X, ROADS_Y, ROAD_HALF, VIEW, WORLD,

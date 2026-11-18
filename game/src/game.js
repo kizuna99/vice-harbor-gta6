@@ -2,9 +2,12 @@
 // pedestrian stepping, car stealing, collisions and the camera. Police, wanted and combat
 // live here too (crime raises heat, heat brings the Serena PD). Missions read and steer
 // this state through the small API at the bottom; rendering only reads it.
+// Recorded-session note: the step order inside stepWorld is deliberate — input first, then
+// the player's own movement, then the street, then the law. Reordering it would let the
+// police act on last frame's position and make every chase feel a beat behind the player.
 
 import {
-  COUNTS, PLAYER, SAVE_KEY, STEP, VEHICLE, VIEW, WANTED, WORLD,
+  COUNTS, DISTRICTS, PLAYER, SAVE_KEY, STEP, VEHICLE, VIEW, WANTED, WORLD,
 } from './config.js';
 import { createRandom } from './random.js';
 import { circleHitsBuilding, resolveCircleCollisions } from './world.js';
@@ -245,6 +248,19 @@ export function createGame(city, seed) {
     state.camera.y += (focus.y + lead.y - state.camera.y) * Math.min(1, dt * 4.2);
     state.camera.x = Math.max(VIEW.width / 2, Math.min(WORLD.width - VIEW.width / 2, state.camera.x));
     state.camera.y = Math.max(VIEW.height / 2, Math.min(WORLD.height - VIEW.height / 2 + 190, state.camera.y));
+
+    // Keep the named district current: the nearest district centre owns the player, and
+    // state is the one place a future system (a district bounty, a turf bonus) would read.
+    let nearestDistrict = state.district;
+    let nearestDistance = Infinity;
+    for (const district of DISTRICTS) {
+      const distance = Math.hypot(district.x - focus.x, district.y - focus.y);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestDistrict = district.name;
+      }
+    }
+    state.district = nearestDistrict;
   }
 
   let policeSystem = null;

@@ -3,6 +3,8 @@
 // city the player drives: cars spawn on roads at the edge of sight, steer by pursuit, and
 // officers spill out of them when the player is on foot. More stars mean more cars, faster
 // cars and a shorter temper — and heat only cools while no uniform can see the player.
+// Recorded-session note: pursuit steering slides along buildings axis-by-axis instead of
+// bouncing, so a chase through the Old Town grid stays a chase and never a traffic jam.
 
 import { VEHICLE, WANTED, WORLD } from './config.js';
 import { nearestRoadPoint, circleHitsBuilding } from './world.js';

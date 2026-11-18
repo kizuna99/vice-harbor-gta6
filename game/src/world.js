@@ -2,6 +2,8 @@
 // marina and the collision answers every other system asks. The city is generated once from
 // a seed: the same seed always raises the same streets, so traffic routes, mission markers
 // and staged screenshots all agree about where things stand.
+// The named places below are the city's contract with the mission scripts — every marker a
+// job points at is looked up here by key, never by a hard-coded coordinate elsewhere.
 
 import { PALETTE, ROADS_X, ROADS_Y, ROAD_HALF, WORLD } from './config.js';
 import { createRandom, pickFrom, rangeFrom } from './random.js';

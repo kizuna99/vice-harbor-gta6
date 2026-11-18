@@ -1,6 +1,8 @@
 // The living street: traffic that follows the road grid, parked cars waiting to be taken,
 // and pedestrians who stroll the sidewalks, flee danger and fall when hurt. Every actor is
 // plain data the simulation steps and the renderer draws; none of them know about the DOM.
+// Recorded-session note: traffic keeps to lanes and slows for the vehicle ahead rather than
+// steering freely — predictable neighbours are what make a police chase readable at speed.
 
 import { COUNTS, LANE_OFFSET, ROADS_X, ROADS_Y, VEHICLE_MODELS, WORLD } from './config.js';
 import { createRandom, pickFrom, rangeFrom } from './random.js';

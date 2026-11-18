@@ -1,6 +1,8 @@
 // Keyboard and mouse state for the whole game. The simulation reads a plain snapshot each
 // step (a direction, a few held keys and the one-shot actions pressed since the last step),
 // so no rule ever touches a DOM event and the screenshot staging can drive the same shape.
+// One-shot actions are a bitmask the game drains once per step: a key pressed and released
+// between two frames is still honoured, which keeps E-to-enter and R-to-reset reliable.
 
 export const ACTION_ENTER = 1;
 export const ACTION_ATTACK = 2;

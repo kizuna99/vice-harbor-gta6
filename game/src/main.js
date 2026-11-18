@@ -5,6 +5,8 @@
 //
 // ?seed=N fixes the city. ?shot=cover|chase|mission|finale (with &seed=N) stages that scene
 // from shots.js instead of running the loop, paints it twice and sets window.__shotReady.
+// The fixed-step accumulator is capped at a quarter second per frame, so a backgrounded
+// tab resumes where it left off instead of fast-forwarding the whole city in one step.
 
 import { STEP, VIEW } from './config.js';
 import { createCity } from './world.js';

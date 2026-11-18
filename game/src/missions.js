@@ -3,6 +3,9 @@
 // to gather on the boardwalk, and a final getaway under the helicopter. Each job is a short
 // list of steps; this system watches the player, moves the objective marker, runs the
 // timers, pays the reward and saves. The renderer reads state.objective and state.jobInfo.
+// The order is the curriculum: First Run teaches driving, Neon Rush teaches speed, Hot
+// Solano teaches stealing, the VIP job teaches care, Beach Money teaches the map on foot,
+// and the Send-Off examines everything at once under three stars of heat.
 
 import { VEHICLE_MODELS } from './config.js';
 

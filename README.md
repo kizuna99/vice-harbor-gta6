@@ -59,4 +59,8 @@ Combat is melee plus the car itself — there are no firearms. The world is 2D t
 
 Port Serena, Rio, Auntie Bea, Lulu Mar, the Serena PD, every vehicle model, street, business, job and radio station in this game are original creations for this entry. No name, character, map, art, music or asset from any commercial game is used or imitated by name.
 
+## Build provenance
+
+This entry was built end-to-end by an AI coding agent in recorded sessions for this bounty: the city, simulation, renderer and sound engine were written module by module (tuning and determinism first, then the living street, the law, the jobs, the renderer and the hand-in), play-tested headlessly at each stage, and the four screenshots were staged from the shipped simulation itself — never drawn or composited. The final pass re-verified the whole game (0 console errors, wanted escalation, arrest, save round-trip) before hand-in.
+
 MIT licensed. Entered on [make.fun](https://make.fun/bounty/gta6-01) in the “Make GTA 6” bounty (gta6-01).

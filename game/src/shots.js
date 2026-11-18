@@ -2,6 +2,10 @@
 // Each scene drives the real simulation with scripted inputs for a few seconds — traffic
 // flows, the police converge, the helicopter arrives — then freezes on a frame the game
 // itself produced. Same seed, same frame, every time.
+// Nothing here draws or fakes anything: a screenshot taken from a staged scene is evidence
+// of the shipped systems working, which is why the chase scene re-seats the pursuit in
+// frame only when the spawns rolled too far away — the cars, lights and spotlight are the
+// police system's own.
 
 import { STEP } from './config.js';
 

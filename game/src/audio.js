@@ -3,6 +3,9 @@
 // closes in, the helicopter thumps overhead at high heat, and three radio stations play
 // procedural loops: a sun-pop arpeggio, a slow wave of chords, and a night-pier bassline.
 // Short one-shot blips mark doors, horns, hits, pickups and job results.
+// The context is created lazily on the first user gesture (unlock), as browsers require;
+// until then every call here is a safe no-op, so menus and staged screenshots stay silent
+// instead of erroring.
 
 import { RADIO_STATIONS } from './config.js';
 

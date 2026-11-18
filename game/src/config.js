@@ -2,6 +2,9 @@
 // the renderer and the screenshot staging all read the same world. The view is a fixed
 // 1280x720 logical stage that the renderer scales to the window; the world itself is a
 // 3600x2700 coastal city the camera travels across.
+// Recorded-session build: this module is written first because everything else imports it —
+// freezing the tuning in one place is what keeps the traffic, police and mission numbers
+// consistent between a live play session and a staged screenshot.
 
 export const VIEW = { width: 1280, height: 720 };
 export const STEP = 1 / 60;

@@ -1,6 +1,8 @@
 // A tiny seeded random source (mulberry32). One seed builds one city, one traffic pattern
 // and one staged screenshot, so a screenshot the maker takes is the frame any player would
 // reach from the same seed, and the simulation never depends on wall-clock luck.
+// Determinism is a hard rule for this entry: the dossier build runs the program twice and
+// both runs must agree byte for byte, so nothing in the game may call Math.random().
 
 export function createRandom(seed) {
   let state = (seed >>> 0) || 1;

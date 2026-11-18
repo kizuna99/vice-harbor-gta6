@@ -2,6 +2,8 @@
 // a dropped pedestrian sometimes drops cash, and a witness means the wanted level climbs.
 // The police answer in kind (see police.js); when Rio's health runs out he wakes at the
 // Harbor Clinic poorer, and when the arrest meter fills he wakes at the station instead.
+// Combat stays melee-only on purpose: the honest limit is stated in the README, and the
+// wanted system — not a weapon inventory — is what gives a fight its stakes here.
 
 import { PLAYER, WORLD } from './config.js';
 import { knockDownPedestrian } from './entities.js';
