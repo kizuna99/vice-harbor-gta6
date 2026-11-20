@@ -1,173 +1,218 @@
-// world.js — Port Serena's static shape: the road grid, the buildings that
-// fill its blocks, the docks apron, the beach and the pier. Everything here
-// is built once from the seed and then only read: collisions, line-of-sight
-// for gunfire, and the renderer all consult the same tables.
+// world.js — Port Serena itself: the road grid, six districts of
+// buildings, the docks with their container yards, beach, water and the
+// pier. Everything is dealt from one seed so the city never changes
+// between visits. Also home to the two questions every other system
+// asks the map: "does this circle fit here?" and "can A see B?"
 
-import { AVENUES, STREETS, WORLD, DISTRICTS, RAMPS } from './config.js';
-import { createRandom, cellNoise } from './random.js';
+import { WORLD_W, WORLD_H, SAFEHOUSE, BEA_SPOT, WEAPON_SHOP, GARAGE, EAST, SOUTH, WEST, DISTRICTS } from './config.js';
+import { makeRng, rngInt, rngPick, hash2 } from './random.js';
 
-const ROAD_HALF = 34;      // asphalt half-width around each grid line
-const SIDEWALK = 12;       // pavement ring beyond the asphalt
+export const ROAD_W = 118;
+export const AVENUES_X = [200, 600, 1000, 1400, 1800, 2200, 2600, 3000];
+export const STREETS_Y = [300, 600, 1000, 1400, 1800, 2100];
+export const WATER_Y = 2305;   // the sea starts here
+export const SAND_Y = 2180;    // sand starts here
+export const PIER = { x0: 2610, y0: 2160, x1: 2770, y1: 2400 };
 
-// Open yards that building generation must keep clear: the docks apron where
-// the crossfire happens, Bea's plaza up north, and the two shop forecourts.
-const CLEARINGS = [
-  { x: 2700, y: 1418, w: 470, h: 230 },   // Port Docks apron
-  { x: 1150, y: 330, w: 210, h: 210 },    // Bea's Corner plaza
-  { x: 520, y: 920, w: 170, h: 170 },     // Munitions forecourt
-  { x: 2120, y: 1320, w: 170, h: 170 },   // Customs forecourt
-  { x: 120, y: 260, w: 170, h: 170 },     // safehouse yard
+export const RAMPS = [
+  { x: 1330, y: 600, angle: EAST },   // Palm Row, just west of the race line
+  { x: 600, y: 1640, angle: SOUTH },  // University drop
+  { x: 2470, y: 300, angle: WEST },   // Marina heights
+  { x: 1750, y: 2100, angle: EAST },  // Boardwalk run-up
 ];
 
-function rectsOverlap(a, b, pad = 0) {
-  return a.x - pad < b.x + b.w && a.x + a.w + pad > b.x && a.y - pad < b.y + b.h && a.y + a.h + pad > b.y;
-}
+// Places that must stay open ground: mission stages, shop fronts, the
+// safehouse yard. Buildings are never dealt into these circles.
+const CLEAR_ZONES = [
+  { x: SAFEHOUSE.x, y: SAFEHOUSE.y, r: 118 },
+  { x: BEA_SPOT.x, y: BEA_SPOT.y, r: 128 },
+  { x: WEAPON_SHOP.x, y: WEAPON_SHOP.y, r: 104 },
+  { x: GARAGE.x, y: GARAGE.y, r: 116 },
+  { x: 2790, y: 1470, r: 205 },  // dockside arena
+  { x: 2900, y: 1420, r: 110 },  // dock gate
+  { x: 2600, y: 1180, r: 96 },   // marina pickup
+  { x: 2900, y: 1800, r: 92 },   // dock warehouse door
+  { x: 2600, y: 165, r: 165 },   // university green
+];
 
-export function districtAt(x, y) {
-  for (const d of DISTRICTS) {
-    if (x >= d.x && x < d.x + d.w && y >= d.y && y < d.y + d.h) return d;
-  }
-  return DISTRICTS[DISTRICTS.length - 1];
+const ROOF_TONES = ['#b0563f', '#8a6a4f', '#6d7f8a', '#a34a5e', '#54707e', '#7d5a80', '#96684a', '#4f6e5d'];
+const WALL_TONES = ['#d9c6a5', '#cbb59a', '#b8c4c9', '#e3d3b8', '#c9a689', '#aebfc0', '#d6b8a6'];
+
+function rectHitsCircle(rx, ry, rw, rh, cx, cy, cr) {
+  const nx = Math.max(rx, Math.min(cx, rx + rw));
+  const ny = Math.max(ry, Math.min(cy, ry + rh));
+  return (nx - cx) * (nx - cx) + (ny - cy) * (ny - cy) < cr * cr;
 }
 
 export function buildWorld(seed) {
-  const rng = createRandom(seed ^ 0x51ab);
+  const rng = makeRng(seed * 7919 + 13);
   const buildings = [];
+  const containers = [];
+  const half = ROAD_W / 2;
 
-  // Walk each block between neighbouring grid lines and drop one to three
-  // buildings into it, leaving alleys. Blocks that touch a clearing stay
-  // empty so mission spaces read as yards, not mazes.
-  const xs = [-80, ...AVENUES, WORLD.width + 80];
-  const ys = [-80, ...STREETS, WORLD.height + 80];
+  // Blocks are the rectangles of land between neighbouring roads.
+  const xs = [-40, ...AVENUES_X, WORLD_W + 40];
+  const ys = [-40, ...STREETS_Y, SAND_Y + 40];
   for (let i = 0; i < xs.length - 1; i++) {
     for (let j = 0; j < ys.length - 1; j++) {
-      const bx = xs[i] + ROAD_HALF + SIDEWALK;
-      const by = ys[j] + ROAD_HALF + SIDEWALK;
-      const bw = xs[i + 1] - xs[i] - (ROAD_HALF + SIDEWALK) * 2;
-      const bh = ys[j + 1] - ys[j] - (ROAD_HALF + SIDEWALK) * 2;
-      if (bw < 120 || bh < 120) continue;
-      if (by > WORLD.beachY - 60) continue; // the shore stays open
-      const block = { x: bx, y: by, w: bw, h: bh };
-      if (CLEARINGS.some((c) => rectsOverlap(block, c, -30))) continue;
-      const district = districtAt(bx + bw / 2, by + bh / 2);
-      const count = rng.int(1, 3);
-      for (let k = 0; k < count; k++) {
-        const w = bw * (count === 1 ? rng.range(0.62, 0.8) : rng.range(0.3, 0.44));
-        const h = bh * rng.range(0.55, 0.82);
-        const x = bx + (count === 1 ? (bw - w) / 2 : (k * bw) / count + rng.range(4, 18));
-        const y = by + rng.range(0, Math.max(1, bh - h));
-        const b = {
-          x, y, w, h,
-          floors: rng.int(2, 9),
-          roof: district.roof[k % district.roof.length],
-          wall: district.wall,
-          seed: rng.int(1, 99999),
-          district: district.name,
-        };
-        if (CLEARINGS.some((c) => rectsOverlap(b, c, 6))) continue;
-        buildings.push(b);
+      const bx0 = xs[i] + half + 22, bx1 = xs[i + 1] - half - 22;
+      const by0 = ys[j] + half + 22, by1 = ys[j + 1] - half - 22;
+      if (bx1 - bx0 < 90 || by1 - by0 < 90) continue;
+      const cx = (bx0 + bx1) / 2, cy = (by0 + by1) / 2;
+      if (cy > SAND_Y - 60) continue;                       // boardwalk + beach stay open
+      const inDocks = cx > 2380 && cy > 1330;
+      if (inDocks && hash2(i, j) < 0.45) continue;          // dock yards are half open ground
+      const lotsX = bx1 - bx0 > 330 ? 2 : 1;
+      const lotsY = by1 - by0 > 300 ? 2 : 1;
+      for (let lx = 0; lx < lotsX; lx++) {
+        for (let ly = 0; ly < lotsY; ly++) {
+          const x0 = bx0 + (bx1 - bx0) * (lx / lotsX) + 7;
+          const x1 = bx0 + (bx1 - bx0) * ((lx + 1) / lotsX) - 7;
+          const y0 = by0 + (by1 - by0) * (ly / lotsY) + 7;
+          const y1 = by0 + (by1 - by0) * ((ly + 1) / lotsY) - 7;
+          const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
+          if (CLEAR_ZONES.some((z) => rectHitsCircle(x0, y0, x1 - x0, y1 - y0, z.x, z.y, z.r))) continue;
+          const centreBias = 1 - Math.min(1, Math.hypot(mx - 1600, my - 1150) / 1500);
+          buildings.push({
+            x: x0, y: y0, w: x1 - x0, h: y1 - y0,
+            floors: inDocks ? rngInt(rng, 1, 2) : rngInt(rng, 2, 4) + Math.round(centreBias * rngInt(rng, 2, 6)),
+            roof: rngPick(rng, ROOF_TONES), wall: rngPick(rng, WALL_TONES),
+            seed: Math.floor(hash2(Math.round(mx), Math.round(my)) * 1e6),
+            warehouse: inDocks,
+          });
+        }
       }
     }
   }
 
-  // Palms along the shore and Palm Row; lamps on every corner grid point.
+  // Container stacks ring the dock arena and fill the yards — they are
+  // low, hard cover: they collide and they block sight lines.
+  const boxCols = ['#b3502e', '#2e6db3', '#3f9e58', '#b3a02e', '#7a4a8c'];
+  const stackSpots = [];
+  for (let a = 0; a < 10; a++) {
+    const ang = (a / 10) * Math.PI * 2;
+    stackSpots.push({ x: 2790 + Math.cos(ang) * 218, y: 1470 + Math.sin(ang) * 218, rot: a % 2 });
+  }
+  stackSpots.push(
+    { x: 2560, y: 1560, rot: 0 }, { x: 2560, y: 1660, rot: 1 }, { x: 3050, y: 1620, rot: 0 },
+    { x: 2980, y: 1960, rot: 1 }, { x: 2620, y: 1980, rot: 0 }, { x: 2500, y: 1420, rot: 1 },
+  );
+  for (const s of stackSpots) {
+    const w = s.rot ? 26 : 66, h = s.rot ? 66 : 26;
+    containers.push({ x: s.x - w / 2, y: s.y - h / 2, w, h, colour: rngPick(rng, boxCols), low: true });
+  }
+
+  // Palms shade Palm Row and the boardwalk; crates litter the docks.
   const palms = [];
-  for (let x = 60; x < WORLD.width; x += 130) palms.push({ x: x + rng.range(-14, 14), y: WORLD.beachY + 26 + rng.range(-8, 8), s: rng.range(0.8, 1.25) });
-  for (let x = 340; x < 3100; x += 210) palms.push({ x, y: 600 - ROAD_HALF - 22, s: rng.range(0.8, 1.15) });
-  const lamps = [];
-  for (const ax of AVENUES) for (const sy of STREETS) lamps.push({ x: ax + ROAD_HALF + 8, y: sy + ROAD_HALF + 8 });
+  for (let x = 320; x < 3150; x += 128) {
+    if (AVENUES_X.some((ax) => Math.abs(ax - x) < 90)) continue;
+    palms.push({ x: x + hash2(x, 1) * 20 - 10, y: 600 - half - 17 });
+    palms.push({ x: x + hash2(x, 2) * 20 - 10, y: 600 + half + 17 });
+  }
+  for (let x = 860; x < 2320; x += 118) palms.push({ x, y: 2162 });
+  const crates = [];
+  for (let i = 0; i < 26; i++) {
+    crates.push({ x: 2440 + hash2(i, 7) * 700, y: 1380 + hash2(i, 11) * 560, s: 12 + hash2(i, 3) * 10 });
+  }
+  const stalls = [];
+  for (let x = 940; x < 2300; x += 168) stalls.push({ x, y: 2066, colour: rngPick(rng, boxCols) });
 
-  return {
-    buildings,
-    palms,
-    lamps,
-    ramps: RAMPS,
-    width: WORLD.width,
-    height: WORLD.height,
+  const colliders = [...buildings, ...containers];
+  // A coarse grid over the colliders keeps collision checks cheap.
+  const CELL = 220;
+  const grid = new Map();
+  const cellKey = (cx, cy) => cx + ':' + cy;
+  colliders.forEach((c, idx) => {
+    const x0 = Math.floor(c.x / CELL), x1 = Math.floor((c.x + c.w) / CELL);
+    const y0 = Math.floor(c.y / CELL), y1 = Math.floor((c.y + c.h) / CELL);
+    for (let gx = x0; gx <= x1; gx++) for (let gy = y0; gy <= y1; gy++) {
+      const k = cellKey(gx, gy);
+      if (!grid.has(k)) grid.set(k, []);
+      grid.get(k).push(idx);
+    }
+  });
 
-    isWater(x, y) {
-      if (y < WORLD.waterY) return false;
-      const p = WORLD.pier;
-      if (x >= p.x && x <= p.x + p.w && y >= p.y && y <= p.y + p.h) return false;
-      return true;
-    },
-    isSand(x, y) {
-      return y >= WORLD.beachY && y < WORLD.waterY;
-    },
-    isRoad(x, y) {
-      for (const ax of AVENUES) if (Math.abs(x - ax) <= ROAD_HALF) return true;
-      for (const sy of STREETS) if (Math.abs(y - sy) <= ROAD_HALF) return true;
-      return false;
-    },
-    rampAt(x, y) {
-      for (const r of RAMPS) if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return r;
-      return null;
-    },
-
-    // Circle vs. every building: returns the position pushed out along the
-    // shallowest axis, or null when the circle is already clear. Water is
-    // solid for anything that is not a boat, and there are no boats.
-    collide(x, y, radius) {
-      let px = x, py = y;
-      px = Math.max(radius, Math.min(WORLD.width - radius, px));
-      const maxY = this.isWater(px, y) ? WORLD.waterY - radius : WORLD.height - radius;
-      py = Math.max(radius, Math.min(maxY, py));
-      for (const b of buildings) {
-        const nx = Math.max(b.x, Math.min(b.x + b.w, px));
-        const ny = Math.max(b.y, Math.min(b.y + b.h, py));
-        const dx = px - nx, dy = py - ny;
-        const d2 = dx * dx + dy * dy;
-        if (d2 >= radius * radius) continue;
-        if (d2 > 0.0001) {
-          const d = Math.sqrt(d2);
-          px = nx + (dx / d) * radius;
-          py = ny + (dy / d) * radius;
-        } else {
-          // Centre inside the rect: leave by the nearest face.
-          const left = px - b.x, right = b.x + b.w - px, top = py - b.y, bot = b.y + b.h - py;
-          const m = Math.min(left, right, top, bot);
-          if (m === left) px = b.x - radius;
-          else if (m === right) px = b.x + b.w + radius;
-          else if (m === top) py = b.y - radius;
-          else py = b.y + b.h + radius;
-        }
-      }
-      return { x: px, y: py };
-    },
-
-    pointInBuilding(x, y, pad = 0) {
-      for (const b of buildings) {
-        if (x >= b.x - pad && x <= b.x + b.w + pad && y >= b.y - pad && y <= b.y + b.h + pad) return b;
-      }
-      return null;
-    },
-
-    // Slab test, segment against every building rect. Gunfire and police
-    // eyesight both stop at walls.
-    lineBlocked(x1, y1, x2, y2) {
-      for (const b of buildings) {
-        if (segmentHitsRect(x1, y1, x2, y2, b)) return true;
-      }
-      return false;
-    },
-
-    textureAt(x, y) {
-      return cellNoise(x >> 5, y >> 5, 7);
-    },
-  };
+  return { buildings, containers, colliders, grid, CELL, palms, crates, stalls, clearZones: CLEAR_ZONES };
 }
 
-function segmentHitsRect(x1, y1, x2, y2, r) {
+export function districtAt(x, y) {
+  if (y >= WATER_Y) return 'The Harbour';
+  if (y >= SAND_Y) return 'The Boardwalk';
+  for (const d of DISTRICTS) if (x >= d.x0 && x < d.x1 && y >= d.y0 && y < d.y1) return d.name;
+  return 'Port Serena';
+}
+
+export function isRoad(x, y) {
+  if (y > WATER_Y - 20) return false;
+  const half = ROAD_W / 2;
+  return AVENUES_X.some((ax) => Math.abs(ax - x) <= half) || STREETS_Y.some((sy) => Math.abs(sy - y) <= half);
+}
+
+export function onPier(x, y) { return x >= PIER.x0 && x <= PIER.x1 && y >= PIER.y0 && y <= PIER.y1; }
+export function isWater(x, y) { return y >= WATER_Y && !onPier(x, y); }
+
+// Push a circle (entity at e.x/e.y with radius r) out of every solid
+// rect it overlaps. Returns true if anything pushed.
+export function collideCircle(world, e, r) {
+  let pushed = false;
+  const CELL = world.CELL;
+  const gx = Math.floor(e.x / CELL), gy = Math.floor(e.y / CELL);
+  const seen = new Set();
+  for (let ix = gx - 1; ix <= gx + 1; ix++) for (let iy = gy - 1; iy <= gy + 1; iy++) {
+    const bucket = world.grid.get(ix + ':' + iy);
+    if (!bucket) continue;
+    for (const idx of bucket) {
+      if (seen.has(idx)) continue;
+      seen.add(idx);
+      const c = world.colliders[idx];
+      const nx = Math.max(c.x, Math.min(e.x, c.x + c.w));
+      const ny = Math.max(c.y, Math.min(e.y, c.y + c.h));
+      const dx = e.x - nx, dy = e.y - ny;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < r * r) {
+        if (d2 > 0.0001) {
+          const d = Math.sqrt(d2);
+          e.x = nx + (dx / d) * r; e.y = ny + (dy / d) * r;
+        } else {
+          // centre inside the rect: leave by the shortest side
+          const left = e.x - c.x, right = c.x + c.w - e.x, top = e.y - c.y, bot = c.y + c.h - e.y;
+          const m = Math.min(left, right, top, bot);
+          if (m === left) e.x = c.x - r; else if (m === right) e.x = c.x + c.w + r;
+          else if (m === top) e.y = c.y - r; else e.y = c.y + c.h + r;
+        }
+        pushed = true;
+      }
+    }
+  }
+  // the sea is a wall unless you are on the pier
+  if (e.y + r > WATER_Y && !onPier(e.x, e.y)) { e.y = WATER_Y - r; pushed = true; }
+  if (e.x < r) { e.x = r; pushed = true; }
+  if (e.y < r) { e.y = r; pushed = true; }
+  if (e.x > WORLD_W - r) { e.x = WORLD_W - r; pushed = true; }
+  if (e.y > WORLD_H - r) { e.y = WORLD_H - r; pushed = true; }
+  return pushed;
+}
+
+// Segment vs. building/container rects — the gunfire and eyesight rule.
+export function losClear(world, x1, y1, x2, y2) {
+  const minx = Math.min(x1, x2) - 4, maxx = Math.max(x1, x2) + 4;
+  const miny = Math.min(y1, y2) - 4, maxy = Math.max(y1, y2) + 4;
+  for (const c of world.colliders) {
+    if (c.x + c.w < minx || c.x > maxx || c.y + c.h < miny || c.y > maxy) continue;
+    if (segRect(x1, y1, x2, y2, c)) return false;
+  }
+  return true;
+}
+
+function segRect(x1, y1, x2, y2, r) {
+  if (x1 >= r.x && x1 <= r.x + r.w && y1 >= r.y && y1 <= r.y + r.h) return true;
+  if (x2 >= r.x && x2 <= r.x + r.w && y2 >= r.y && y2 <= r.y + r.h) return true;
   const dx = x2 - x1, dy = y2 - y1;
   let t0 = 0, t1 = 1;
-  const axes = [
-    [-dx, x1 - r.x], [dx, r.x + r.w - x1],
-    [-dy, y1 - r.y], [dy, r.y + r.h - y1],
-  ];
-  for (const [p, q] of axes) {
-    if (Math.abs(p) < 1e-9) {
-      if (q < 0) return false;
-    } else {
+  const slabs = [[-dx, x1 - r.x], [dx, r.x + r.w - x1], [-dy, y1 - r.y], [dy, r.y + r.h - y1]];
+  for (const [p, q] of slabs) {
+    if (Math.abs(p) < 1e-9) { if (q < 0) return false; }
+    else {
       const t = q / p;
       if (p < 0) { if (t > t1) return false; if (t > t0) t0 = t; }
       else { if (t < t0) return false; if (t < t1) t1 = t; }

@@ -1,479 +1,423 @@
-// game.js — the simulation itself: one object, every system plugged into
-// it, advanced in fixed steps. Modules never keep private copies of the
-// shared collections — cars, enemies, crew, the arsenal all live here, so
-// anything (a test harness included) that reaches in and moves a piece
-// finds the game agreeing with it on the very next tick.
+// game.js — the Game itself: one object holding the whole run (Rio,
+// the city traffic, the SPD, the job book, the races, the crew, the
+// money) and the rules that connect them — E to interact, J to shoot
+// or to flag off a race, number keys for shops and gun slots, Q to
+// reload, C for the crew, N for the radio. Also the save: a single
+// localStorage record, vice-harbor-save-v3, written on every job done.
 
-import { HEAT_LEVELS, SAVE_KEY, GUN_SHOP, GARAGE, SAFEHOUSE, START_HOUR, DAY_LENGTH } from './config.js';
-import { buildWorld } from './world.js';
-import { createAudio, STATIONS } from './audio.js';
-import { createArsenal, updateWeapons, explodeAt } from './weapons.js';
-import { createPolice, updatePolice, clearPolice, starsFor } from './police.js';
-import { updateEnemies } from './combat.js';
-import { makePlayer, makeCar, seedTraffic, seedPeds, updateEntities, updatePlayerOnFoot, updatePlayerCar } from './entities.js';
-import { createMissions } from './missions.js';
-import { raceNear, startRace, updateRaces } from './races.js';
-import { recruit, recruitable, toggleFollow, updateCrew } from './crew.js';
+import { WEAPONS, WEAPON_BY_SLOT, WEAPON_SHOP, GARAGE, GARAGE_ITEMS, ARMOR_PRICE, SAVE_KEY, STATIONS } from './config.js';
+import { buildWorld, collideCircle, districtAt } from './world.js';
+import { makePlayer, makeCar, spawnTraffic, spawnPeds, updateTraffic, updatePeds, driveCar } from './entities.js';
+import { Police } from './police.js';
+import { freshAmmo, fireControl, startReload } from './weapons.js';
+import { updateCombat } from './combat.js';
+import { createMissions, startStep, updateMissions } from './missions.js';
+import { tryStartRace, updateRaces } from './races.js';
+import { tryRecruit, toggleCrewMode, restoreCrew, updateCrew } from './crew.js';
+import { Input } from './input.js';
+import { Audio } from './audio.js';
+import { clamp } from './random.js';
 
-export function createGame(seed) {
-  const game = {
-    seed,
-    world: buildWorld(seed),
-    audio: createAudio(),
-    state: 'title', // title | playing | paused | busted | wasted
-    overlayT: 0,
-    time: 0,
-    hour: START_HOUR,
-    cash: 120,
-    respect: 0,
-    player: makePlayer(),
-    cars: [],
-    peds: [],
-    enemies: [],
-    enemiesDown: 0,
-    crew: [],
-    particles: [],
-    camera: { x: 262, y: 368 },
-    arsenal: createArsenal(),
-    policeRef: createPolice(),
-    missions: createMissions(),
-    shop: null,
-    mods: { engine: false, plating: false, nitro: false },
-    station: 0,
-    raceState: null,
-    lastRace: null,
-    arrestFill: 0,
-    heatLock: 0,
-    shake: 0,
-    bannerText: '',
-    bannerT: 0,
-    cookOffs: [], // {x,y,t} delayed secondary explosions
-    saveT: 0,
-    manualSaveT: -99,
+const SPD_FRONT = { x: 600, y: 252 };
+const HOSPITAL = { x: 1800, y: 948 };
 
-    get ammo() { return this.arsenal.ammo; },
-    set ammo(v) { this.arsenal.ammo = v; },
-    get weaponsOwned() { return this.arsenal.owned; },
-    set weaponsOwned(v) { this.arsenal.owned = v; },
+export class Game {
+  constructor(seed = 7) {
+    this.seed = seed;
+    this.world = buildWorld(seed);
+    this.state = 'title';
+    this.timeHours = 10.2;
+    this.elapsed = 0;
+    this.player = makePlayer();
+    this.cars = spawnTraffic(this.world, seed);
+    this.peds = spawnPeds(seed);
+    this.enemies = [];
+    this.projectiles = [];
+    this.thrown = [];
+    this.particles = [];
+    this.policeRef = new Police();
+    this.missions = createMissions();
+    this.raceState = null;
+    this.lastRace = null;
+    this.crew = [];
+    this.respect = 0;
+    this.cash = 250;
+    this.weaponsOwned = { fists: true };
+    this.ammo = freshAmmo();
+    this.mods = { engine: false, plating: false };
+    this.shop = null;
+    this.station = 0;
+    this.arrestFill = 0;
+    this.camera = { x: 1600, y: 800 };
+    this.view = { w: 960, h: 600 };
+    this.shake = 0;
+    this.threat = { x: 0, y: 0, t: 0 };
+    this.toasts = [];
+    this.lastBump = null;
+    this.overT = 0;
+    this.hasSave = false;
+    this.shotMode = null;
+    this.factories = { makeCar: (t, x, y, a) => makeCar(t, x, y, a, Math.random) };
+    try { this.hasSave = !!localStorage.getItem(SAVE_KEY); } catch { this.hasSave = false; }
+  }
 
-    banner(text) { this.bannerText = text; this.bannerT = 3.4; },
+  toast(text) {
+    this.toasts.push({ text, t: 3.4 });
+    if (this.toasts.length > 3) this.toasts.shift();
+  }
 
-    addHeat(n) {
-      if (this.heatLock) return;
-      this.policeRef.heat = Math.min(320, this.policeRef.heat + n);
-    },
-    setHeatFloor(v) {
-      if (this.heatLock) return;
-      this.policeRef.heat = Math.max(this.policeRef.heat, v);
-    },
-    setWanted(n) {
-      const stars = Math.max(0, Math.min(5, Math.round(n)));
-      this.heatLock = 0;
-      this.policeRef.heat = HEAT_LEVELS[stars];
-      if (stars === 0) clearPolice(this);
-    },
+  startGame() {
+    Audio.unlock();
+    this.player = makePlayer();
+    this.cars = spawnTraffic(this.world, this.seed);
+    this.peds = spawnPeds(this.seed);
+    this.enemies = []; this.projectiles = []; this.thrown = []; this.particles = [];
+    this.policeRef = new Police();
+    this.missions = createMissions();
+    this.raceState = null; this.lastRace = null;
+    this.crew = [];
+    this.respect = 0; this.cash = 250;
+    this.weaponsOwned = { fists: true };
+    this.ammo = freshAmmo();
+    this.mods = { engine: false, plating: false };
+    this.shop = null; this.station = 0; this.arrestFill = 0;
+    this.timeHours = 10.2;
+    this.state = 'playing';
+    startStep(this);
+    this.toast('Port Serena. Bea has work — follow the gold marker.');
+  }
 
-    spawnParticles(x, y, n, opts = {}) {
-      const color = opts.color || '#ffffff';
-      const speed = opts.speed || 120, life = opts.life || 0.5, size = opts.size || 3;
-      for (let i = 0; i < n; i++) {
-        const a = Math.random() * Math.PI * 2;
-        const s = speed * (0.3 + Math.random() * 0.7);
-        this.particles.push({ x, y, vx: Math.sin(a) * s, vy: -Math.cos(a) * s, life: life * (0.5 + Math.random()), maxLife: life, color, size });
-      }
-      if (this.particles.length > 420) this.particles.splice(0, this.particles.length - 420);
-    },
+  continueGame() {
+    Audio.unlock();
+    if (this.load()) { this.state = 'playing'; this.toast('Welcome back to Port Serena.'); }
+    else this.startGame();
+  }
 
-    damagePlayer(amount) {
-      const p = this.player;
-      if (p.car || this.state !== 'playing') return;
-      let rest = amount;
-      if (p.armor > 0) {
-        const absorbed = Math.min(p.armor, amount * 0.65);
-        p.armor -= absorbed;
-        rest = amount - absorbed;
-      }
-      p.health -= rest;
-      this.shake = Math.min(8, this.shake + 1.5);
-      if (p.health <= 0) this.wasted();
-    },
+  setWanted(n) { this.policeRef.setWanted(n); }
 
-    hurtEnemy(e, damage) {
-      if (e.state === 'down') return;
-      e.hp -= damage;
-      this.spawnParticles(e.x, e.y, 3, { color: '#e2543e', speed: 70, life: 0.3, size: 3 });
-      if (e.hp <= 0) {
-        e.state = 'down';
-        e.downT = 0;
-        this.enemiesDown += 1;
-        this.addHeat(2);
-      }
-    },
+  save() {
+    const data = {
+      ver: 3, cash: this.cash, respect: this.respect,
+      weaponsOwned: this.weaponsOwned, ammo: this.ammo, mods: this.mods, station: this.station,
+      player: { x: this.player.x, y: this.player.y, health: this.player.health, armor: this.player.armor, weapon: this.player.weapon },
+      missions: { jobIndex: this.missions.jobIndex, stepIndex: this.missions.stepIndex, done: this.missions.done },
+      crew: this.crew.map((m) => ({ name: m.name, x: Math.round(m.x), y: Math.round(m.y), health: m.health })),
+    };
+    try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); this.hasSave = true; } catch { /* private mode */ }
+    return true;
+  }
 
-    hurtCrew(m, damage) {
-      if (m.state === 'down') return;
-      m.hp -= damage;
-      if (m.hp <= 0) {
-        m.state = 'down';
-        m.reviveT = 11;
-        this.banner(`${m.name} is down!`);
-      }
-    },
+  load() {
+    let data;
+    try { data = JSON.parse(localStorage.getItem(SAVE_KEY) || 'null'); } catch { data = null; }
+    if (!data) return false;
+    this.cash = data.cash ?? this.cash;
+    this.respect = data.respect ?? 0;
+    this.weaponsOwned = data.weaponsOwned || { fists: true };
+    this.ammo = Object.assign(freshAmmo(), data.ammo || {});
+    this.mods = Object.assign({ engine: false, plating: false }, data.mods || {});
+    this.station = data.station ?? 0;
+    Audio.setStation(this.station);
+    if (data.player) {
+      this.player.x = data.player.x; this.player.y = data.player.y;
+      this.player.health = data.player.health; this.player.armor = data.player.armor;
+      this.player.weapon = data.player.weapon || 'fists';
+      this.player.car = null;
+    }
+    if (data.missions) {
+      this.missions.jobIndex = data.missions.jobIndex;
+      this.missions.stepIndex = data.missions.stepIndex;
+      this.missions.done = data.missions.done;
+      this.missions.active = false; this.missions.runtime = null;
+    }
+    restoreCrew(this, data.crew);
+    return true;
+  }
 
-    damageCar(c, amount, fromBlast) {
-      if (c.wrecked) return;
-      const plated = c === this.player.car && this.mods.plating;
-      c.hp -= plated ? amount * 0.5 : amount;
-      c.damage = Math.min(100, c.damage + amount * 0.5);
-      if (c.hp <= 0) {
-        c.wrecked = true;
-        c.speed = 0;
-        explodeAt(this, c.x, c.y, 88, 46);
-        // A wreck near other fuel tanks cooks them off in turn.
-        for (const o of this.cars) {
-          if (o !== c && !o.wrecked && Math.hypot(o.x - c.x, o.y - c.y) < 120) {
-            this.cookOffs.push({ car: o, t: 0.55 + Math.random() * 0.5 });
-          }
-        }
-        if (this.player.car === c) {
-          this.player.car = null;
-          this.damagePlayer(18);
-        }
-      }
-    },
+  endPursuitIfAny() {
+    if (this.policeRef.heatLock !== null) {
+      this.policeRef.heatLock = null;
+      this.missions.active = false;
+      this.missions.runtime = null;
+    }
+  }
 
-    busted() {
-      if (this.state !== 'playing') return;
-      this.state = 'busted';
-      this.overlayT = 1.5;
-      const fine = Math.min(this.cash, 60 + this.policeRef.stars * 40);
-      this.cash -= fine;
-      this.banner(`BUSTED — $${fine} in fines`);
-    },
+  busted() {
+    if (this.state !== 'playing') return;
+    this.endPursuitIfAny();
+    this.state = 'busted';
+    this.overT = 1.9;
+    const fine = Math.min(this.cash, 150);
+    this.cash -= fine;
+    this.shop = null;
+    Audio.denied();
+    this.toast('BUSTED — the SPD impound your pride and $' + fine);
+  }
 
-    wasted() {
-      if (this.state !== 'playing') return;
-      this.state = 'wasted';
-      this.overlayT = 1.5;
-      const bill = Math.floor(this.cash * 0.1);
-      this.cash -= bill;
-      this.banner(`WASTED — clinic bill $${bill}`);
-    },
+  wasted() {
+    if (this.state !== 'playing') return;
+    this.endPursuitIfAny();
+    this.state = 'wasted';
+    this.overT = 1.9;
+    this.cash -= Math.min(this.cash, 100);
+    this.shop = null;
+    this.toast('WASTED — Serena General patches you up');
+  }
 
-    respawn() {
-      const p = this.player;
-      p.car = null;
-      p.x = SAFEHOUSE.x + 30; p.y = SAFEHOUSE.y + 30;
-      p.health = 100;
-      this.heatLock = 0;
-      this.setWanted(0);
-      this.state = 'playing';
-    },
+  respawn() {
+    const at = this.state === 'busted' ? SPD_FRONT : HOSPITAL;
+    this.player.car = null;
+    this.player.x = at.x; this.player.y = at.y;
+    this.player.health = 100;
+    if (this.state === 'wasted') this.player.armor = 0;
+    this.policeRef.setWanted(0);
+    this.arrestFill = 0;
+    this.enemies = [];
+    this.state = 'playing';
+  }
 
-    startGame() {
-      // PLAY NOW is a fresh first morning in Port Serena, every time. The
-      // title screen's other promise — CONTINUE — is continueGame(), which
-      // is the one that reaches for the saved life.
-      this.audio.unlock();
-      this.resetWorld();
-      this.state = 'playing';
-    },
+  openShop(kind) { this.shop = kind; Audio.door(); }
 
-    continueGame() {
-      this.audio.unlock();
-      if (!this.load()) this.resetWorld();
-      this.state = 'playing';
-    },
-
-    resetWorld() {
-      this.cars = seedTraffic(this, this.seed);
-      this.peds = seedPeds(this, this.seed);
-      this.enemies = [];
-      this.enemiesDown = 0;
-      this.crew = [];
-      this.player = makePlayer();
-      this.cash = 120;
-      this.respect = 0;
-      this.missions = createMissions();
-      this.policeRef = createPolice();
-      this.arsenal = createArsenal();
-      this.mods = { engine: false, plating: false, nitro: false };
-      this.raceState = null;
-      this.lastRace = null;
-      this.shop = null;
-      this.hour = START_HOUR;
-    },
-
-    save() {
-      this.manualSaveT = this.time;
-      const data = {
-        v: 3,
-        cash: this.cash, respect: this.respect,
-        weaponsOwned: this.arsenal.owned, ammo: this.arsenal.ammo,
-        armor: this.player.armor, health: this.player.health,
-        mods: this.mods,
-        jobIndex: this.missions.jobIndex, stepIndex: this.missions.stepIndex,
-        crew: this.crew.map((m) => ({ name: m.name, hp: m.hp })),
-        station: this.station, hour: this.hour,
-        x: this.player.x, y: this.player.y,
-      };
-      try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); } catch { /* private mode */ }
-      return true;
-    },
-    saveSoon() { this.save(); },
-
-    load() {
-      let raw = null;
-      try { raw = localStorage.getItem(SAVE_KEY); } catch { /* ignore */ }
-      if (!raw) return false;
-      let d;
-      try { d = JSON.parse(raw); } catch { return false; }
-      if (!d || typeof d !== 'object') return false;
-      if (!this.cars.length) { this.cars = seedTraffic(this, this.seed); this.peds = seedPeds(this, this.seed); }
-      this.cash = d.cash ?? this.cash;
-      this.respect = d.respect ?? 0;
-      this.arsenal.owned = d.weaponsOwned || { fists: true };
-      if (d.ammo) this.arsenal.ammo = d.ammo;
-      this.player.armor = d.armor ?? 0;
-      this.player.health = d.health ?? 100;
-      this.mods = d.mods || { engine: false, plating: false, nitro: false };
-      this.missions.jobIndex = d.jobIndex ?? 0;
-      this.missions.stepIndex = d.stepIndex ?? 0;
-      this.missions.armed = false;
-      this.missions.done = this.missions.jobIndex >= 8;
-      this.station = d.station ?? 0;
-      this.hour = d.hour ?? START_HOUR;
-      if (typeof d.x === 'number') { this.player.x = d.x; this.player.y = d.y; }
-      this.crew = [];
-      for (const saved of d.crew || []) {
-        const roster = [
-          { name: 'Vex', role: 'Mechanic', color: '#4ecdc4', damage: 9, maxHp: 120 },
-          { name: 'Mara', role: 'Smuggler', color: '#ef6f6c', damage: 12, maxHp: 150 },
-        ].find((r) => r.name === saved.name);
-        if (roster) {
-          this.crew.push({
-            name: roster.name, role: roster.role, color: roster.color,
-            x: this.player.x + 24, y: this.player.y + 12, angle: 0,
-            hp: saved.hp ?? roster.maxHp, maxHp: roster.maxHp, damage: roster.damage,
-            state: 'follow', riding: false, reviveT: 0, shotT: 1,
-          });
-        }
-      }
-      return true;
-    },
-
-    // ---- interaction ------------------------------------------------------
-    pressE() {
-      const p = this.player;
-      if (this.shop) { this.shop = null; return; }
-      if (p.car) {
-        const dGarage = Math.hypot(p.car.x - GARAGE.x, p.car.y - GARAGE.y);
-        if (dGarage < 120) { this.shop = 'garage'; this.audio.blip(); return; }
-        // Step out beside the car.
-        p.car.driver = false;
-        p.car.parked = true;
-        p.x = p.car.x + 30; p.y = p.car.y + 6;
-        p.car = null;
+  buyItem(n) {
+    if (this.shop === 'weapons') {
+      const guns = { 1: 'pistol', 2: 'smg', 3: 'shotgun' };
+      if (guns[n]) {
+        const key = guns[n], def = WEAPONS[key];
+        if (this.weaponsOwned[key]) { this.toast('Already on your hip'); Audio.denied(); return; }
+        if (this.cash < def.price) { this.toast('Not enough cash'); Audio.denied(); return; }
+        this.cash -= def.price;
+        this.weaponsOwned[key] = true;
+        this.ammo[key] = { mag: def.mag, reserve: def.reserve };
+        this.toast(def.name + ' — yours. Slot ' + def.slot + '.');
+        Audio.cash();
         return;
       }
-      const dGuns = Math.hypot(p.x - GUN_SHOP.x, p.y - GUN_SHOP.y);
-      if (dGuns < 84) { this.shop = 'weapons'; this.audio.blip(); return; }
-      if (recruitable(this)) { recruit(this); return; }
-      // Nearest borrowable car.
-      let best = null, bd = 50;
-      for (const c of this.cars) {
-        if (c.wrecked) continue;
-        const d = Math.hypot(c.x - p.x, c.y - p.y);
-        if (d < bd) { bd = d; best = c; }
+      if (n === 4) {
+        if (this.cash < WEAPONS.grenade.price) { this.toast('Not enough cash'); Audio.denied(); return; }
+        this.cash -= WEAPONS.grenade.price;
+        this.weaponsOwned.grenade = true;
+        this.ammo.grenade.mag = Math.min(12, this.ammo.grenade.mag + 3);
+        this.toast('Three grenades, pins included');
+        Audio.cash();
+        return;
       }
-      if (best) {
-        best.parked = false;
-        best.driver = true;
-        p.car = best;
-        p.x = best.x; p.y = best.y;
-        if (!best.marked) this.addHeat(3);
-        this.audio.blip();
+      if (n === 5) {
+        if (this.cash < 60) { this.toast('Not enough cash'); Audio.denied(); return; }
+        this.cash -= 60;
+        for (const k of ['pistol', 'smg', 'shotgun']) if (this.weaponsOwned[k]) this.ammo[k].reserve = WEAPONS[k].reserve;
+        this.toast('Magazines topped up');
+        Audio.cash();
+        return;
       }
-    },
-
-    buyDigit(n) {
-      const list = this.shop === 'weapons' ? GUN_SHOP.items : this.shop === 'garage' ? GARAGE.items : null;
-      if (!list) return;
-      const item = list[n - 1];
+      if (n === 6) {
+        if (this.cash < 50) { this.toast('Not enough cash'); Audio.denied(); return; }
+        this.cash -= 50; this.player.health = 100;
+        this.toast('Patched up');
+        Audio.cash();
+        return;
+      }
+      if (n === 8) {
+        if (this.cash < ARMOR_PRICE) { this.toast('Not enough cash'); Audio.denied(); return; }
+        this.cash -= ARMOR_PRICE;
+        this.player.armor = 100;
+        this.toast('Kevlar vest fitted — soaks 65% of the hurt');
+        Audio.cash();
+        return;
+      }
+    } else if (this.shop === 'garage') {
+      const item = GARAGE_ITEMS[n - 1];
       if (!item) return;
-      if (this.cash < item.price) { this.audio.dryFire(); return; }
-      const ars = this.arsenal;
-      const acts = {
-        'own-pistol': () => { ars.owned.pistol = true; ars.ammo.pistol.reserve += 24; },
-        'own-smg': () => { ars.owned.smg = true; ars.ammo.smg.reserve += 60; },
-        'own-shotgun': () => { ars.owned.shotgun = true; ars.ammo.shotgun.reserve += 12; },
-        'grenades': () => { ars.owned.grenade = true; ars.ammo.grenade.mag += 3; },
-        'ammo-pistol': () => { ars.ammo.pistol.reserve += 36; },
-        'ammo-smg': () => { ars.ammo.smg.reserve += 60; },
-        'ammo-shotgun': () => { ars.ammo.shotgun.reserve += 12; },
-        'armor': () => { this.player.armor = 100; },
-        'mod-engine': () => { this.mods.engine = true; },
-        'mod-plating': () => { this.mods.plating = true; },
-        'mod-nitro': () => { this.mods.nitro = true; },
-        'respray': () => { if (this.player.car) this.player.car.color = '#b388ff'; },
-        'repair': () => { if (this.player.car) { this.player.car.damage = 0; this.player.car.hp = 999; } },
-      };
-      const act = acts[item.act];
-      if (!act) return;
-      // Owned big-ticket items cannot be bought twice.
-      if ((item.act.startsWith('own-') && ars.owned[item.act.slice(4)]) ||
-          (item.act === 'mod-engine' && this.mods.engine) ||
-          (item.act === 'mod-plating' && this.mods.plating) ||
-          (item.act === 'mod-nitro' && this.mods.nitro) ||
-          (item.act === 'armor' && this.player.armor >= 100)) {
-        this.audio.dryFire();
+      const car = this.player.car;
+      if (item.key === 'repair') {
+        if (!car) { this.toast('No car on the lift'); Audio.denied(); return; }
+        if (this.cash < item.price) { this.toast('Not enough cash'); Audio.denied(); return; }
+        this.cash -= item.price; car.damage = 0;
+        this.toast('Bodywork mint again');
+        Audio.cash();
         return;
       }
+      if (this.mods[item.key]) { this.toast('Already fitted'); Audio.denied(); return; }
+      if (this.cash < item.price) { this.toast('Not enough cash'); Audio.denied(); return; }
       this.cash -= item.price;
-      act();
-      this.audio.cash();
-      this.saveSoon();
-    },
+      this.mods[item.key] = true;
+      this.toast(item.name + ' fitted');
+      Audio.cash();
+    }
+  }
 
-    // ---- the tick ---------------------------------------------------------
-    update(dt, input) {
-      this.time += dt;
-      this.bannerT = Math.max(0, this.bannerT - dt);
-      this.shake = Math.max(0, this.shake - dt * 26);
+  interact() {
+    const p = this.player;
+    if (p.car) {
+      if (Math.hypot(p.car.x - GARAGE.x, p.car.y - GARAGE.y) <= 124) { this.openShop('garage'); return; }
+      const car = p.car;
+      p.car = null;
+      car.driver = null;
+      p.x = car.x + Math.cos(car.angle) * 30;
+      p.y = car.y + Math.sin(car.angle) * 30;
+      collideCircle(this.world, p, p.radius);
+      Audio.door();
+      return;
+    }
+    if (Math.hypot(p.x - WEAPON_SHOP.x, p.y - WEAPON_SHOP.y) <= 94) { this.openShop('weapons'); return; }
+    if (tryRecruit(this)) return;
+    let best = null, bd = 66;
+    for (const car of this.cars) {
+      if (car.wrecked) continue;
+      const d = Math.hypot(car.x - p.x, car.y - p.y);
+      if (d < bd) { bd = d; best = car; }
+    }
+    if (best) {
+      p.car = best;
+      best.driver = 'player';
+      best.parked = false;
+      p.x = best.x; p.y = best.y;
+      Audio.door();
+      if (best.marked) this.toast('The marked GT. Bea sends her thanks in advance.');
+    }
+  }
 
-      if (this.state === 'title') {
-        if (input.wasPressed('Enter') || input.wasPressed('KeyJ')) this.startGame();
-        else if (input.wasPressed('KeyC')) this.continueGame();
-        input.drain();
-        return;
-      }
-      if (this.state === 'busted' || this.state === 'wasted') {
-        this.overlayT -= dt;
-        if (this.overlayT <= 0) this.respawn();
-        input.drain();
-        return;
-      }
-      if (this.state === 'paused') {
-        if (input.wasPressed('Escape') || input.wasPressed('KeyP')) this.state = 'playing';
-        input.drain();
-        return;
-      }
+  handleEscape() {
+    if (this.shop) { this.shop = null; Audio.door(); return; }
+    if (this.state === 'playing') this.state = 'paused';
+    else if (this.state === 'paused') this.state = 'playing';
+  }
 
-      // playing
-      this.hour = (this.hour + (dt / DAY_LENGTH) * 24) % 24;
+  update(dt) {
+    this.elapsed += dt;
+    for (const t of this.toasts) t.t -= dt;
+    this.toasts = this.toasts.filter((t) => t.t > 0);
+    if (this.shake > 0) this.shake = Math.max(0, this.shake - dt * 16);
+    if (this.player.muzzle > 0) this.player.muzzle -= dt;
 
-      if (this.shop) {
-        for (let n = 1; n <= 8; n++) if (input.wasPressed('Digit' + n)) this.buyDigit(n);
-        if (input.wasPressed('Escape') || input.wasPressed('KeyE')) this.shop = null;
-        input.drain();
-        return; // the world holds its breath while Rio shops
-      }
+    if (Input.tap('Escape')) this.handleEscape();
 
-      if (input.wasPressed('Escape') || input.wasPressed('KeyP')) { this.state = 'paused'; input.drain(); return; }
-      if (input.wasPressed('KeyM')) this.audio.toggleMute();
-      if (input.wasPressed('KeyE')) this.pressE();
-      if (input.wasPressed('KeyC')) toggleFollow(this);
-      if (input.wasPressed('KeyH') && this.player.car) this.audio.horn();
-      if (input.wasPressed('KeyR') && !this.player.car) {
-        this.player.x = SAFEHOUSE.x + 30; this.player.y = SAFEHOUSE.y + 30;
-      }
-      if (input.wasPressed('KeyN') && this.player.car) {
-        this.station = (this.station + 1) % STATIONS.length;
-        this.audio.blip();
-      }
+    if (this.state === 'title') {
+      updateTraffic(this, dt * 0.6);
+      updatePeds(this, dt * 0.6);
+      this.camera.x = 1650 + Math.cos(this.elapsed * 0.045) * 520;
+      this.camera.y = 900 + Math.sin(this.elapsed * 0.033) * 320;
+      Input.drain();
+      return;
+    }
+    if (this.state === 'busted' || this.state === 'wasted') {
+      this.overT -= dt;
+      if (this.overT <= 0) this.respawn();
+      Input.drain();
+      return;
+    }
+    if (this.state !== 'playing') { Input.drain(); return; }
 
-      // Racing claims the J edge before fists do, but only in a car at a
-      // marker; the edge is drained below either way.
-      if (input.wasPressed('KeyJ') && this.player.car && !this.raceState) {
-        const def = raceNear(this);
-        if (def) startRace(this, def);
-      }
+    this.timeHours = (this.timeHours + dt * 0.02) % 24;
 
-      if (this.player.car) updatePlayerCar(this, dt, input);
-      else {
-        updatePlayerOnFoot(this, dt, input);
-        updateWeapons(this, dt, input);
-      }
-      updateEntities(this, dt);
-      updatePolice(this, dt);
-      updateEnemies(this, dt);
-      updateCrew(this, dt);
-      updateRaces(this, dt);
-      this.missions.update(this, dt);
+    if (this.shop) {
+      for (let n = 1; n <= 8; n++) if (Input.tap('Digit' + n)) this.buyItem(n);
+      Input.drain();
+      return;
+    }
 
-      // Cook-off chain reactions.
-      for (let i = this.cookOffs.length - 1; i >= 0; i--) {
-        const c = this.cookOffs[i];
-        c.t -= dt;
-        if (c.t <= 0) {
-          this.cookOffs.splice(i, 1);
-          if (!c.car.wrecked) { c.car.hp = 0; this.damageCar(c.car, 999, true); }
-        }
-      }
+    const p = this.player;
+    const jobBefore = this.missions.jobIndex;
 
-      // Particles.
-      for (let i = this.particles.length - 1; i >= 0; i--) {
-        const pt = this.particles[i];
-        pt.life -= dt;
-        if (pt.life <= 0) { this.particles.splice(i, 1); continue; }
-        pt.x += pt.vx * dt; pt.y += pt.vy * dt;
-        pt.vx *= 0.94; pt.vy *= 0.94;
-      }
-
-      // Camera settles on whoever Rio is right now.
-      const focus = this.player.car || this.player;
-      this.camera.x += (focus.x - this.camera.x) * Math.min(1, dt * 5);
-      this.camera.y += (focus.y - this.camera.y) * Math.min(1, dt * 5);
-
-      this.audio.update(dt, this);
-
-      // Autosave, but never in the breath right after a manual save/load
-      // shuffle (a test, or a player, may be mid-swap).
-      this.saveT += dt;
-      if (this.saveT > 15 && this.time - this.manualSaveT > 4) {
-        this.saveT = 0;
-        this.save();
-        this.manualSaveT = -99;
-      }
-
-      input.drain();
-    },
-
-    getState() {
-      const pol = this.policeRef;
-      return {
-        state: this.state,
-        cash: this.cash,
-        respect: this.respect,
-        health: Math.round(this.player.health),
-        armor: Math.round(this.player.armor),
-        inCar: !!this.player.car,
-        shop: this.shop,
-        weapon: this.player.weapon,
-        weaponsOwned: Object.keys(this.arsenal.owned).filter((k) => this.arsenal.owned[k]),
-        ammo: this.arsenal.ammo,
-        mods: this.mods,
-        vehicles: this.cars.length,
-        peds: this.peds.length,
-        enemies: this.enemies.reduce((n, e) => n + (e.state !== 'down' ? 1 : 0), 0),
-        enemiesDown: this.enemiesDown,
-        jobIndex: this.missions.jobIndex,
-        stepIndex: this.missions.stepIndex,
-        jobDone: this.missions.jobDone,
-        wanted: pol.stars,
-        policeCars: pol.cars.length,
-        helicopter: !!pol.heli,
-        station: STATIONS[this.station].name,
-        race: this.raceState ? { phase: this.raceState.phase, name: this.raceState.def.name, cp: this.raceState.cpIndex } : null,
-        lastRace: this.lastRace,
-        crew: this.crew.map((m) => ({ name: m.name, hp: Math.round(m.hp), state: m.state })),
-        x: Math.round(this.player.x),
-        y: Math.round(this.player.y),
-        hour: this.hour,
+    // --- Rio on foot or behind the wheel -------------------------------
+    if (p.car) {
+      const ctrl = {
+        throttle: (Input.down('KeyW') || Input.down('ArrowUp') ? 1 : 0) - (Input.down('KeyS') || Input.down('ArrowDown') ? 1 : 0),
+        steer: (Input.down('KeyA') || Input.down('ArrowLeft') ? -1 : 0) + (Input.down('KeyD') || Input.down('ArrowRight') ? 1 : 0),
       };
-    },
-  };
+      driveCar(this, p.car, dt, ctrl);
+      p.x = p.car.x; p.y = p.car.y; p.angle = p.car.angle;
+      p.speedNow = Math.abs(p.car.speed);
+      Audio.setEngine(true, Math.abs(p.car.speed) / p.car.type.top);
+      if (Input.tap('KeyJ') || Input.tap('MouseLeft')) tryStartRace(this);
+    } else {
+      Audio.setEngine(false);
+      let vx = (Input.down('KeyD') || Input.down('ArrowRight') ? 1 : 0) - (Input.down('KeyA') || Input.down('ArrowLeft') ? 1 : 0);
+      let vy = (Input.down('KeyS') || Input.down('ArrowDown') ? 1 : 0) - (Input.down('KeyW') || Input.down('ArrowUp') ? 1 : 0);
+      const len = Math.hypot(vx, vy);
+      if (len > 0) {
+        vx /= len; vy /= len;
+        p.angle = Math.atan2(vx, -vy);
+        p.x += vx * 178 * dt;
+        p.y += vy * 178 * dt;
+        p.walkCycle += dt * 9.5;
+        p.speedNow = 178;
+        collideCircle(this.world, p, p.radius);
+      } else p.speedNow = 0;
+      fireControl(this, dt, Input.down('KeyJ'), Input.tap('KeyJ') || Input.tap('MouseLeft'));
+    }
 
-  game.resetWorld();
-  return game;
+    if (Input.tap('KeyE')) this.interact();
+    for (let n = 1; n <= 5; n++) {
+      if (Input.tap('Digit' + n)) {
+        const key = WEAPON_BY_SLOT[n];
+        if (key && (key === 'fists' || this.weaponsOwned[key])) { p.weapon = key; p.reloadT = 0; }
+      }
+    }
+    if (Input.tap('KeyQ')) startReload(this);
+    if (Input.tap('KeyC')) toggleCrewMode(this);
+    if (Input.tap('KeyN') && p.car) {
+      this.station = (this.station + 1) % STATIONS.length;
+      Audio.setStation(this.station);
+      this.toast('Radio: ' + STATIONS[this.station]);
+    }
+
+    // --- the city turns --------------------------------------------------
+    updateTraffic(this, dt);
+    updatePeds(this, dt);
+    this.policeRef.update(this, dt);
+    updateCombat(this, dt);
+    updateMissions(this, dt);
+    updateRaces(this, dt);
+    updateCrew(this, dt);
+
+    if (this.arrestFill >= 1) this.busted();
+    if (this.missions.jobIndex > jobBefore) this.save(); // autosave on a finished job
+
+    Audio.setSiren(this.policeRef.stars > 0 && this.policeRef.cars.length > 0);
+    Audio.radioTick(!!p.car);
+
+    // camera follows Rio, softly
+    const tx = p.car ? p.car.x : p.x, ty = p.car ? p.car.y : p.y;
+    this.camera.x += (tx - this.camera.x) * Math.min(1, dt * 5.5);
+    this.camera.y += (ty - this.camera.y) * Math.min(1, dt * 5.5);
+    const hw = this.view.w / 2, hh = this.view.h / 2;
+    this.camera.x = clamp(this.camera.x, Math.min(hw, 1600), Math.max(1600, 3200 - hw));
+    this.camera.y = clamp(this.camera.y, Math.min(hh, 1200), Math.max(1200, 2400 - hh));
+
+    Input.drain();
+  }
+
+  getState() {
+    const p = this.player;
+    return {
+      state: this.state,
+      cash: this.cash,
+      respect: this.respect,
+      wanted: this.policeRef.stars,
+      heat: Math.round(this.policeRef.heat),
+      policeCars: this.policeRef.cars.length,
+      helicopter: !!this.policeRef.heli,
+      vehicles: this.cars.length,
+      peds: this.peds.length,
+      inCar: !!p.car,
+      health: Math.round(p.health),
+      armor: Math.round(p.armor),
+      weapon: p.weapon,
+      weaponsOwned: Object.keys(this.weaponsOwned).filter((k) => this.weaponsOwned[k]),
+      ammo: this.ammo,
+      mods: this.mods,
+      shop: this.shop,
+      jobIndex: this.missions.jobIndex,
+      stepIndex: this.missions.stepIndex,
+      jobDone: this.missions.justCompleted,
+      enemies: this.enemies.filter((e) => e.state !== 'down').length,
+      enemiesDown: this.enemies.filter((e) => e.state === 'down').length,
+      race: this.raceState,
+      lastRace: this.lastRace,
+      station: this.station,
+      crew: this.crew,
+      district: districtAt(p.x, p.y),
+      timeHours: Math.round(this.timeHours * 10) / 10,
+    };
+  }
 }

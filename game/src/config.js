@@ -1,101 +1,88 @@
-// config.js — every tuning number for Vice Harbor lives here, grouped by the
-// system that owns it. Nothing in this file reaches for the DOM or the clock;
-// it is pure data the rest of the game reads.
+// config.js — every shared table for Port Serena lives here: the map
+// frame, the heat ladder, the six car models, the gun rack, both shops,
+// both street races and the crew roster. Other modules import these
+// constants instead of hard-coding numbers of their own.
 
-export const WORLD = {
-  width: 3200,
-  height: 2400,
-  beachY: 2140,          // sand starts here
-  waterY: 2280,          // open water starts here
-  pier: { x: 1180, y: 2190, w: 130, h: 210 },
-};
+export const WORLD_W = 3200;
+export const WORLD_H = 2400;
+
+// Heat is a 0..260 score; the star count is whichever rung it reaches.
+// 170 is exactly four stars — the Searchlight Run locks heat there.
+export const HEAT_RUNGS = [0, 30, 70, 120, 170, 260];
+export function starsForHeat(heat) {
+  let s = 0;
+  for (let i = 0; i < HEAT_RUNGS.length; i++) if (heat >= HEAT_RUNGS[i]) s = i;
+  return s;
+}
 
 export const SAVE_KEY = 'vice-harbor-save-v3';
-export const STEP = 1 / 60;
+export const SAFEHOUSE = { x: 200, y: 340, name: 'Old Town safehouse' };
+export const BEA_SPOT = { x: 1250, y: 430, name: "Auntie Bea's corner" };
 
-// Avenues run north-south, streets run east-west. Buildings fill the blocks
-// between them, so anything on these lines is guaranteed open ground.
-export const AVENUES = [200, 600, 1000, 1400, 1800, 2200, 2600, 3000];
-export const STREETS = [200, 600, 1000, 1400, 1800, 2200];
+// angle convention across the whole game: a facing of `a` points along
+// (sin a, -cos a) — 0 is north, PI/2 is east, PI is south.
+export const EAST = Math.PI / 2;
+export const SOUTH = Math.PI;
+export const WEST = -Math.PI / 2;
+export const NORTH = 0;
 
-// Wanted heat: stars are thresholds over a single heat score. Heat 170 is
-// exactly four stars — Searchlight Run leans on that.
-export const HEAT_LEVELS = [0, 30, 70, 120, 170, 260];
-export const HEAT_LOCK_RUN = 170;
-
-export const PLAYER = {
-  radius: 13,
-  walkSpeed: 152,
-  sprintSpeed: 218,
-  startX: 262,
-  startY: 368,
-  startCash: 120,
-};
-
-export const SAFEHOUSE = { x: 200, y: 340, name: 'Old Town Safehouse' };
-export const CLINIC = { x: 1250, y: 430, name: "Bea's Corner Clinic" };
-
-// Six drivable shells. top is px/s, grip shapes how fast the nose swings.
-export const VEHICLE_TYPES = [
-  { id: 'coupe', name: 'Calle Coupe', top: 252, accel: 205, grip: 2.6, hp: 120, color: '#e2543e' },
-  { id: 'gt', name: 'Solano GT', top: 308, accel: 262, grip: 2.9, hp: 110, color: '#f2b035' },
-  { id: 'sedan', name: 'Palma Sedan', top: 224, accel: 172, grip: 2.3, hp: 140, color: '#7fb2d9' },
-  { id: 'taxi', name: 'Harbor Taxi', top: 232, accel: 180, grip: 2.3, hp: 140, color: '#ffd23e' },
-  { id: 'truck', name: 'Dockmaster Truck', top: 196, accel: 138, grip: 1.8, hp: 220, color: '#8a9a5b' },
-  { id: 'cruiser', name: 'Serena Cruiser', top: 282, accel: 238, grip: 2.7, hp: 180, color: '#e8ecf2' },
+export const CAR_TYPES = [
+  { id: 'coupe',   name: 'Calle Coupe',    top: 268, accel: 218, w: 46, h: 24, colours: ['#e2483d', '#f2a03d', '#3d7de2'] },
+  { id: 'gt',      name: 'Solano GT',      top: 336, accel: 268, w: 48, h: 24, colours: ['#ffd23d', '#e23d8f', '#22262e'] },
+  { id: 'sedan',   name: 'Palma Sedan',    top: 238, accel: 188, w: 48, h: 25, colours: ['#cfd6dd', '#5d7a99', '#7a4a3a'] },
+  { id: 'taxi',    name: 'Harbor Taxi',    top: 246, accel: 196, w: 48, h: 25, colours: ['#f7b731', '#f7b731', '#f7b731'] },
+  { id: 'truck',   name: 'Dockmaster Truck', top: 208, accel: 158, w: 58, h: 30, colours: ['#4a7a5d', '#746a58', '#5d6d8a'] },
+  { id: 'cruiser', name: 'Serena Cruiser', top: 292, accel: 238, w: 48, h: 25, colours: ['#eef1f4'] },
 ];
 
-// Weapon table. slot is the number key that draws it; mag is rounds per
-// reload; rof is seconds between shots (0 = press-per-shot semi handling in
-// the weapons module, using `semi`).
-export const WEAPON_DEFS = {
-  fists:   { slot: 5, label: 'Fists', damage: 12, range: 36, rof: 0.34, semi: true },
-  pistol:  { slot: 1, label: 'Harbor Pistol', damage: 22, range: 520, rof: 0.26, semi: true, mag: 12, speed: 640 },
-  smg:     { slot: 2, label: 'Calle SMG', damage: 13, range: 460, rof: 0.072, semi: false, mag: 30, speed: 620 },
-  shotgun: { slot: 3, label: 'Dockside Shotgun', damage: 15, range: 300, rof: 0.8, semi: true, mag: 6, speed: 560, pellets: 6, spread: 0.16 },
-  grenade: { slot: 4, label: 'Grenade', damage: 70, range: 240, rof: 0.6, semi: true, mag: 1, fuse: 0.75, blast: 96 },
+// slot: the number key that draws it. mag: rounds carried in the gun.
+// rate: ms between shots. pellets: projectiles per trigger pull.
+export const WEAPONS = {
+  fists:   { slot: 5, name: 'Fists',        price: 0,   dmg: 9,  rate: 300,  mag: Infinity, reserve: Infinity, auto: false, pellets: 1, spread: 0,    speed: 0,   range: 40 },
+  pistol:  { slot: 1, name: 'Harbor Pistol', price: 180, dmg: 34, rate: 240,  mag: 12,       reserve: 96,       auto: false, pellets: 1, spread: 0.02, speed: 920, range: 520 },
+  smg:     { slot: 2, name: 'Calle SMG',     price: 420, dmg: 16, rate: 105,  mag: 30,       reserve: 180,      auto: true,  pellets: 1, spread: 0.06, speed: 940, range: 480 },
+  shotgun: { slot: 3, name: 'Pier Shotgun',  price: 650, dmg: 13, rate: 720,  mag: 6,        reserve: 48,       auto: false, pellets: 6, spread: 0.17, speed: 860, range: 330 },
+  grenade: { slot: 4, name: 'Grenades',      price: 90,  dmg: 95, rate: 620,  mag: 3,        reserve: 0,        auto: false, pellets: 1, spread: 0,    speed: 430, range: 300 },
 };
+export const WEAPON_BY_SLOT = {};
+for (const [key, w] of Object.entries(WEAPONS)) WEAPON_BY_SLOT[w.slot] = key;
 
-// Serena Munitions shelf, in the order the number keys buy them.
-export const GUN_SHOP = { x: 600, y: 1000, name: 'Serena Munitions', items: [
-  { label: 'Harbor Pistol', price: 180, act: 'own-pistol' },
-  { label: 'Calle SMG', price: 420, act: 'own-smg' },
-  { label: 'Dockside Shotgun', price: 380, act: 'own-shotgun' },
-  { label: 'Grenades x3', price: 90, act: 'grenades' },
-  { label: 'Pistol rounds +36', price: 40, act: 'ammo-pistol' },
-  { label: 'SMG rounds +60', price: 60, act: 'ammo-smg' },
-  { label: 'Shells +12', price: 50, act: 'ammo-shotgun' },
-  { label: 'Kevlar vest', price: 150, act: 'armor' },
-] };
+export const ARMOR_PRICE = 150;
+export const ARMOR_ABSORB = 0.65; // kevlar soaks 65% of incoming damage
 
-// Serena Customs counter, same idea for anything with wheels.
-export const GARAGE = { x: 2200, y: 1400, name: 'Serena Customs', items: [
-  { label: 'Engine tune', price: 300, act: 'mod-engine' },
-  { label: 'Armour plating', price: 350, act: 'mod-plating' },
-  { label: 'Nitro kit', price: 250, act: 'mod-nitro' },
-  { label: 'Respray', price: 120, act: 'respray' },
-  { label: 'Full repair', price: 100, act: 'repair' },
-] };
-
-// Four stunt ramps. The Palm Row ramp sits just east of x=1120 on the y=600
-// street and throws cars that cross it with speed.
-export const RAMPS = [
-  { x: 1212, y: 600, w: 54, h: 44 },
-  { x: 2280, y: 1000, w: 54, h: 44 },
-  { x: 1018, y: 1800, w: 54, h: 44 },
-  { x: 2680, y: 2200, w: 54, h: 44 },
+export const WEAPON_SHOP = { x: 600, y: 1000, name: 'Serena Munitions' };
+export const GARAGE = { x: 2200, y: 1400, name: 'Serena Customs' };
+export const GARAGE_ITEMS = [
+  { key: 'engine',  name: 'Engine tune',    price: 300, blurb: '+12% top speed and pull' },
+  { key: 'plating', name: 'Harbor plating', price: 350, blurb: 'half collision and ram damage' },
+  { key: 'repair',  name: 'Full repair',    price: 120, blurb: 'bodywork back to mint' },
 ];
+
+export const RACES = [
+  {
+    id: 'palm', name: 'Palm Row Sprint', payout: 400,
+    start: { x: 1400, y: 600 },
+    checkpoints: [[2200, 600], [3000, 600], [3000, 1000], [2200, 1000], [2200, 1400], [1400, 1400], [1400, 1000], [1400, 600]],
+  },
+  {
+    id: 'harbor', name: 'Harbor Lights Run', payout: 650,
+    start: { x: 2600, y: 2100 },
+    checkpoints: [[1800, 2100], [1000, 2100], [600, 1800], [600, 1000], [1000, 600], [1800, 1000], [2600, 1400], [2600, 2100]],
+  },
+];
+
+export const CREW_DEFS = [
+  { name: 'Vex',  respect: 30, weapon: 'pistol', colour: '#e2543e', blurb: 'dock kid, quick hands, quicker temper' },
+  { name: 'Mara', respect: 70, weapon: 'smg',    colour: '#3e8fe2', blurb: 'ex-harbor patrol, never misses twice' },
+];
+
+export const STATIONS = ['Serena Sun FM', 'Harbor Wave Radio', 'Night Pier 88'];
 
 export const DISTRICTS = [
-  { name: 'Old Town', x: 0, y: 0, w: 1050, h: 850, roof: ['#b08968', '#9c6644', '#7f5539'], wall: '#d9c7a7' },
-  { name: 'University Quarter', x: 1050, y: 0, w: 1100, h: 850, roof: ['#6a8eae', '#55748f', '#476278'], wall: '#cfd8dc' },
-  { name: 'Serena Marina', x: 2150, y: 0, w: 1050, h: 850, roof: ['#4ecdc4', '#38ada5', '#2d8f89'], wall: '#e8f6f3' },
-  { name: 'Palm Row', x: 0, y: 850, w: 1700, h: 420, roof: ['#ef6f6c', '#e2543e', '#c7432f'], wall: '#ffe8d6' },
-  { name: 'Downtown', x: 1700, y: 850, w: 1500, h: 420, roof: ['#5d6d7e', '#47525f', '#37424e'], wall: '#b8c4ce' },
-  { name: 'The Boardwalk', x: 0, y: 2050, w: 3200, h: 350, roof: ['#f4a259', '#e07a3f', '#bc4b26'], wall: '#ffedd8' },
-  { name: 'Port Docks', x: 2150, y: 1270, w: 1050, h: 780, roof: ['#7d8597', '#646e82', '#4a5265'], wall: '#c9ced6' },
-  { name: 'Midtown', x: 0, y: 1270, w: 2150, h: 780, roof: ['#84a98c', '#6a8f71', '#52755a'], wall: '#e3ecd9' },
+  { name: 'Old Town',            x0: 0,    y0: 0,    x1: 1180, y1: 880,  ground: '#8f8578' },
+  { name: 'Palm Row',            x0: 1180, y0: 330,  x1: 3200, y1: 880,  ground: '#97a07e' },
+  { name: 'University Quarter',  x0: 2080, y0: 0,    x1: 3200, y1: 330,  ground: '#7e937f' },
+  { name: 'Serena Marina',       x0: 2080, y0: 880,  x1: 3200, y1: 1330, ground: '#8a9a8d' },
+  { name: 'The Boardwalk',       x0: 780,  y0: 1880, x1: 2380, y1: 2400, ground: '#b09a72' },
+  { name: 'Port Docks',          x0: 2380, y0: 1330, x1: 3200, y1: 2400, ground: '#767c84' },
 ];
-
-export const DAY_LENGTH = 240; // seconds for a full 24h cycle
-export const START_HOUR = 9.25;

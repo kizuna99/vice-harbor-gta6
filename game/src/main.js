@@ -1,81 +1,68 @@
-// main.js — boot, the frame loop, and the window.ViceHarbor handle the
-// harbour is known by. The simulation advances in fixed 1/60 steps (several
-// in a slow frame, none in a fast one) and the renderer paints afterwards.
-//
-// ?seed=N fixes the city. ?shot=cover|chase|mission|finale stages that
-// scene instead of running the loop, paints it, and sets __shotReady.
+// main.js — boot and the bridge to the outside world. Sets up the
+// canvas, the clock and the input, exposes the window.ViceHarbor
+// handle (the game's public face: getState, startGame, setWanted,
+// missions, startStep, save), and runs the frame loop. If the URL
+// names a staged scene (?shot=cover&seed=7), that scene is set up
+// before the first frame.
 
-import { STEP } from './config.js';
-import { createGame } from './game.js';
-import { createInput } from './input.js';
-import { createRenderer } from './render.js';
-import { stageShot } from './shots.js';
-
-const params = new URLSearchParams(window.location.search);
-const shotName = params.get('shot');
-const seedParam = Number.parseInt(params.get('seed') ?? '', 10);
-const seed = Number.isInteger(seedParam) ? seedParam : 20261117;
+import { Game } from './game.js';
+import { render } from './render.js';
+import { Input } from './input.js';
+import { startStep } from './missions.js';
+import { applyShot } from './shots.js';
+import { Audio } from './audio.js';
 
 const canvas = document.getElementById('game');
-const status = document.getElementById('status');
-const renderer = createRenderer(canvas);
-const input = createInput(window);
-const game = createGame(seed);
+const ctx = canvas.getContext('2d');
+const params = new URLSearchParams(location.search);
+const seed = Number(params.get('seed')) || 7;
 
-function fitCanvas() {
+const game = new Game(seed);
+
+function resize() {
   canvas.width = window.innerWidth;
   canvas.height = window.innerHeight;
+  game.view = { w: canvas.width, h: canvas.height };
 }
-window.addEventListener('resize', fitCanvas);
-fitCanvas();
+window.addEventListener('resize', resize);
+resize();
 
-// The public handle. `missions` is a getter on purpose: starting a new game
-// swaps the mission book, and anyone holding the handle must see the live
-// one, never the retired copy.
+Input.attach(window, canvas);
+
+canvas.addEventListener('mousedown', (ev) => {
+  Audio.unlock();
+  if (game.state !== 'title' || !game.titleButtons) return;
+  for (const b of game.titleButtons) {
+    if (ev.clientX >= b.x && ev.clientX <= b.x + b.w && ev.clientY >= b.y && ev.clientY <= b.y + b.h) {
+      if (b.id === 'play') game.startGame();
+      else if (b.id === 'continue') game.continueGame();
+    }
+  }
+});
+window.addEventListener('keydown', (ev) => {
+  Audio.unlock();
+  if (game.state === 'title' && (ev.code === 'Enter' || ev.code === 'Space')) game.startGame();
+});
+
 window.ViceHarbor = {
   game,
   getState: () => game.getState(),
   startGame: () => game.startGame(),
-  continueGame: () => game.continueGame(),
   setWanted: (n) => game.setWanted(n),
-  get missions() { return game.missions; },
-  startStep: () => game.missions.startStep(game),
+  startStep: () => startStep(game),
   save: () => game.save(),
+  load: () => game.load(),
+  get missions() { return game.missions; },
 };
 
-// Touch pad: the on-screen buttons feed the same input sets as the keys.
-for (const btn of document.querySelectorAll('[data-key]')) {
-  const code = btn.getAttribute('data-key');
-  const on = (e) => { e.preventDefault(); input.setVirtual(code, true); if (game.state === 'title') game.startGame(); };
-  const off = (e) => { e.preventDefault(); input.setVirtual(code, false); };
-  btn.addEventListener('pointerdown', on);
-  btn.addEventListener('pointerup', off);
-  btn.addEventListener('pointerleave', off);
-}
+if (params.get('shot')) applyShot(game, params.get('shot'));
 
-if (shotName) {
-  stageShot(game, shotName);
-  renderer.draw(game);
-  renderer.draw(game);
-  window.__shotReady = true;
-  if (status) status.textContent = `Vice Harbor scene: ${shotName}`;
-} else {
-  let last = performance.now();
-  let acc = 0;
-  const frame = (now) => {
-    const elapsed = Math.min(0.25, (now - last) / 1000);
-    last = now;
-    acc += elapsed;
-    while (acc >= STEP) {
-      game.update(STEP, input);
-      acc -= STEP;
-    }
-    renderer.draw(game);
-    if (status) {
-      const s = game.getState();
-      status.textContent = `Vice Harbor: ${s.state}, $${s.cash}, wanted ${s.wanted} stars`;
-    }
-    window.requestAnimationFrame(frame);
-  };
-  window.requestAnimationFrame(frame);
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, Math.max(0.0005, (now - last) / 1000));
+  last = now;
+  game.update(dt);
+  render(ctx, game, canvas.width, canvas.height);
+  requestAnimationFrame(frame);
 }
+requestAnimationFrame(frame);
