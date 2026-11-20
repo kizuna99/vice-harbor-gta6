@@ -1,9 +1,8 @@
-// Tiny dependency-free static server for local playtesting.
-// Serves the game/ folder at http://localhost:8080 with the MIME
-// types a browser needs for ES modules, and refuses any path that
-// tries to escape the game directory.
+// Dependency-free static server for local playtesting.
+// Serves game/ at http://localhost:8080 with browser-correct MIME
+// types for ES modules and refuses paths that escape game/.
 //
-//   node serve.ts   →   open http://localhost:8080
+//   node serve.ts
 
 import { createServer } from 'node:http';
 import { readFileSync, existsSync, statSync } from 'node:fs';
@@ -34,7 +33,6 @@ const server = createServer((req, res) => {
     let pathname = decodeURIComponent(url.pathname);
     if (pathname === '/') pathname = '/index.html';
 
-    // Path-traversal guard: the resolved file must stay inside game/.
     const filePath = normalize(join(gameDir, pathname));
     if (!filePath.startsWith(gameDir)) {
       res.writeHead(403, { 'Content-Type': 'text/plain' });
@@ -56,5 +54,5 @@ const server = createServer((req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`Vice Harbor dev server: http://localhost:${PORT}`);
+  console.log(`Vice Harbor v2 dev server: http://localhost:${PORT}`);
 });

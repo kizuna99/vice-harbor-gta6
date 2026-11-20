@@ -1,6 +1,5 @@
-// Fists, health, armor and the two ways a run ends: BUSTED and WASTED.
-// Respawning happens at Harbor Clinic and costs ten percent of cash.
-// In v2 the kevlar vest soaks most of every hit before health moves.
+// Fists, damage (with kevlar absorbing 65%), and the two endings:
+// BUSTED at the SPD desk, WASTED on a Harbor Clinic gurney.
 
 import { PLAYER, CRIME_HEAT } from './config.js';
 import { clamp } from './random.js';
@@ -30,20 +29,18 @@ export function tryPunch(game) {
       hitSomething = true;
     }
   }
-  // The Ferro crew can be shoved too — it buys a breath, nothing more.
   for (const e of game.enemies) {
     if (e.state === 'down') continue;
     const dx = e.x - p.x, dy = e.y - p.y;
     const d = Math.hypot(dx, dy);
     if (d < PLAYER.punchRange + 8 && dx * fx + dy * fy > 0) {
-      e.x += fx * 22; e.y += fy * 22;
-      e.health -= 10;
+      e.health -= PLAYER.punchDamage;
+      game.spawnHitParticles(e.x, e.y);
+      if (e.health <= 0) { e.state = 'down'; game.enemiesDown++; }
       hitSomething = true;
     }
   }
-  // Officers can be shoved back too, at a steeper heat price.
   for (const o of game.policeRef.officers) {
-    if (o.state === 'down') continue;
     const dx = o.x - p.x, dy = o.y - p.y;
     const d = Math.hypot(dx, dy);
     if (d < PLAYER.punchRange + 6 && dx * fx + dy * fy > 0) {
@@ -55,19 +52,19 @@ export function tryPunch(game) {
   return hitSomething;
 }
 
+// Kevlar soaks 65% of every hit until the vest is shredded; being in
+// a car soaks most of what is left before it reaches Rio.
 export function damagePlayer(game, amount) {
   const p = game.player;
-  if (p.dead || p.busted || amount <= 0) return;
-  // Being inside a car soaks most of the blow before the vest sees it.
-  let dmg = p.car ? amount * 0.35 : amount;
-  // Kevlar eats PLAYER.armorSoak of what is left, point for point,
-  // until the vest itself is spent; the spill hits health.
+  if (p.dead || p.busted) return;
+  let incoming = p.car ? amount * 0.35 : amount;
   if (p.armor > 0) {
-    const soaked = Math.min(p.armor, dmg * PLAYER.armorSoak);
+    const absorbed = incoming * PLAYER.armorAbsorb;
+    const soaked = Math.min(p.armor, absorbed);
     p.armor -= soaked;
-    dmg -= soaked;
+    incoming -= soaked;
   }
-  p.health = clamp(p.health - dmg, 0, PLAYER.maxHealth);
+  p.health = clamp(p.health - incoming, 0, PLAYER.maxHealth);
   game.shake = Math.min(14, (game.shake || 0) + amount * 0.22);
   if (p.health <= 0) {
     p.dead = true;

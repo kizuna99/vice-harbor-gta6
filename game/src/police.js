@@ -1,12 +1,11 @@
-// Serena Police Department: wanted heat, pursuit cars, foot officers,
-// the helicopter — and, new in v2, cruiser roadblocks at four stars.
-// Heat only decays while nobody in uniform can see Rio; the arrest
-// meter fills when an officer is close and Rio is slow.
+// Serena Police Department: heat, stars, pursuit, foot officers,
+// Air One and — from four stars — roadblocks across the avenue.
+// Heat only decays while no uniform can see Rio.
 
-import { WANTED, CRIME_HEAT, VEHICLES } from './config.js';
+import { WANTED, VEHICLES } from './config.js';
 import { clamp, range, angleLerp } from './random.js';
 import { makeVehicle } from './entities.js';
-import { resolveCollision } from './world.js';
+import { resolveCollision, nearestRoadPoint } from './world.js';
 
 export const police = {
   heat: 0,
@@ -15,9 +14,9 @@ export const police = {
   officers: [],
   heli: null,
   unseenT: 0,
-  arrest: 0,       // 0..1
+  arrest: 0,
   flashT: 0,
-  roadblockCd: 0,  // seconds until the next roadblock can be placed
+  roadblockT: 0,
 };
 
 export function starsForHeat(heat) {
@@ -44,14 +43,13 @@ export function setWantedLevel(n) {
     police.cars.length = 0;
     police.officers.length = 0;
     police.heli = null;
-    police.roadblockCd = 0;
+    police.roadblockT = 0;
   }
 }
 
 export function clearWanted() { setWantedLevel(0); }
 
-function spawnCopCar(player, existing) {
-  // Spawn just outside view, on a road-ish ring around the player.
+function spawnCopCar(player) {
   const a = range(0, Math.PI * 2);
   const d = range(430, 540);
   const x = clamp(player.x + Math.cos(a) * d, 60, 3140);
@@ -59,7 +57,7 @@ function spawnCopCar(player, existing) {
   const car = makeVehicle(5, x, y, 0, '#f2f2f2');
   car.police = true;
   car.driver = true;
-  existing.push(car);
+  police.cars.push(car);
   return car;
 }
 
@@ -68,76 +66,55 @@ function spawnOfficer(player) {
   return {
     x: clamp(player.x + Math.cos(a) * 380, 40, 3160),
     y: clamp(player.y + Math.sin(a) * 380, 40, 1630),
-    angle: 0, speed: 0, state: 'chase', // chase | down
-    health: 70, downT: 0,
+    angle: 0, speed: 0, state: 'chase',
   };
 }
 
-function chaseCars() {
-  return police.cars.filter((c) => !c.roadblock);
-}
-
 function placeRoadblock(player) {
-  // Two cruisers side by side across the road ahead of the suspect,
-  // noses pointed back at him. They hold position — a wall, not a chase.
+  // Two cruisers parked sideways on the road ahead of the suspect.
   const target = player.car || player;
-  const a = target.angle || 0;
-  const fx = Math.sin(a), fy = -Math.cos(a);
-  const px = Math.cos(a), py = Math.sin(a); // perpendicular unit vector
-  const aheadX = target.x + fx * WANTED.roadblockAheadPx;
-  const aheadY = target.y + fy * WANTED.roadblockAheadPx;
-  for (const side of [-1, 1]) {
-    const car = makeVehicle(5,
-      clamp(aheadX + px * side * 30, 50, 3150),
-      clamp(aheadY + py * side * 30, 50, 1640),
-      a + Math.PI, '#f2f2f2');
+  const ang = target.angle || 0;
+  const fx = Math.sin(ang), fy = -Math.cos(ang);
+  const aheadX = target.x + fx * 270;
+  const aheadY = target.y + fy * 270;
+  const snap = nearestRoadPoint(clamp(aheadX, 60, 3140), clamp(aheadY, 60, 1620));
+  for (let i = 0; i < 2; i++) {
+    const car = makeVehicle(5, snap.x + (i === 0 ? -20 : 20), snap.y + (i === 0 ? -14 : 14), Math.PI / 2, '#f2f2f2');
     car.police = true;
     car.driver = true;
     car.roadblock = true;
     car.speed = 0;
-    resolveCollision(car, 22);
     police.cars.push(car);
   }
-  police.roadblockCd = WANTED.roadblockRespawnSec;
+  police.roadblockT = WANTED.roadblockCooldownSec;
 }
 
 export function updatePolice(dt, player, game) {
   police.flashT += dt * 7;
-  police.roadblockCd = Math.max(0, police.roadblockCd - dt);
+  police.roadblockT = Math.max(0, police.roadblockT - dt);
   const target = player.car || player;
   const px = target.x, py = target.y;
 
-  // Roadblocks: keep a fresh pair in front of a four-star suspect.
-  if (police.stars >= WANTED.roadblockFromStar) {
-    const blocks = police.cars.filter((c) => c.roadblock && !c.wrecked);
-    if (blocks.length < WANTED.roadblockCars && police.roadblockCd <= 0) {
-      // Drop any stale single survivor so the new pair is coherent.
-      police.cars = police.cars.filter((c) => !c.roadblock);
-      placeRoadblock(player);
-    }
-  } else if (police.cars.some((c) => c.roadblock)) {
-    police.cars = police.cars.filter((c) => !c.roadblock);
-  }
-
-  // Maintain force size for the current star level (chase units only;
-  // roadblock cruisers are extra and exempt from the trim).
+  const pursuit = police.cars.filter((c) => !c.roadblock);
+  const blocks = police.cars.filter((c) => c.roadblock);
   const wantCars = WANTED.policeCarsByStar[police.stars];
   const wantFoot = WANTED.footCopsByStar[police.stars];
   if (police.stars > 0) {
-    while (chaseCars().length < wantCars) spawnCopCar(player, police.cars);
+    while (pursuit.length < wantCars) pursuit.push(spawnCopCar(player));
     while (police.officers.length < wantFoot) police.officers.push(spawnOfficer(player));
   }
-  let excess = chaseCars().length - wantCars;
-  if (excess > 0) {
-    police.cars = police.cars.filter((c) => {
-      if (c.roadblock) return true;
-      if (excess > 0) { excess--; return false; }
-      return true;
-    });
-  }
+  if (pursuit.length > wantCars) pursuit.length = Math.max(wantCars, 0);
   if (police.officers.length > wantFoot) police.officers.length = Math.max(wantFoot, 0);
+  police.cars = [...pursuit, ...blocks];
 
-  // Helicopter joins at three stars and above.
+  // Roadblocks from four stars, refreshed on the cooldown.
+  if (police.stars >= WANTED.roadblockFromStar && blocks.length < 2 && police.roadblockT <= 0) {
+    placeRoadblock(player);
+  }
+  if (police.stars < WANTED.roadblockFromStar && blocks.length) {
+    police.cars = police.cars.filter((c) => !c.roadblock);
+  }
+
   if (police.stars >= WANTED.heliFromStar) {
     if (!police.heli) {
       police.heli = { x: px + 300, y: py - 260, angle: 0, sweep: 0, spotX: px, spotY: py };
@@ -148,7 +125,6 @@ export function updatePolice(dt, player, game) {
   if (police.heli) {
     const h = police.heli;
     h.sweep += dt;
-    // Orbit the target and drag the searchlight across the street.
     const orbitA = h.sweep * 0.55;
     const hx = px + Math.cos(orbitA) * 150;
     const hy = py + Math.sin(orbitA) * 110;
@@ -159,20 +135,14 @@ export function updatePolice(dt, player, game) {
     h.spotY = py + Math.cos(h.sweep * 1.3) * 26;
   }
 
-  // Line of sight: any unit within range counts as seeing Rio.
   let seen = false;
 
   for (const car of police.cars) {
+    if (car.wrecked) continue;
+    if (car.roadblock) { car.speed = 0; if (Math.hypot(px - car.x, py - car.y) < 420) seen = true; continue; }
     const dx = px - car.x, dy = py - car.y;
     const dist = Math.hypot(dx, dy);
     if (dist < 420) seen = true;
-    if (car.roadblock) {
-      // The wall holds: brake to a stop and keep its nose on Rio.
-      car.speed = Math.max(0, car.speed - 320 * dt);
-      car.angle = angleLerp(car.angle, Math.atan2(dx, -dy), Math.min(1, dt * 1.6));
-      continue;
-    }
-    if (car.wrecked) { car.speed = 0; continue; }
     const wantAngle = Math.atan2(dx, -dy);
     car.angle = angleLerp(car.angle, wantAngle, Math.min(1, dt * 2.6));
     const top = VEHICLES[5].topSpeed * (0.82 + police.stars * 0.045);
@@ -181,20 +151,14 @@ export function updatePolice(dt, player, game) {
     car.x += Math.sin(car.angle) * car.speed * dt;
     car.y += -Math.cos(car.angle) * car.speed * dt;
     resolveCollision(car, 22);
-    // Ram contact nudges the suspect and chips damage.
     if (player.car && dist < 44 && game) game.onPoliceRam?.(car);
   }
 
   for (const o of police.officers) {
-    if (o.state === 'down') {
-      o.downT -= dt;
-      if (o.downT <= 0) { o.state = 'chase'; o.health = 70; }
-      continue;
-    }
     const dx = px - o.x, dy = py - o.y;
     const dist = Math.hypot(dx, dy);
     if (dist < 300) seen = true;
-    if (dist > 560) { // teleport-catch-up so foot cops stay relevant
+    if (dist > 560) {
       o.x = px + range(-300, 300); o.y = py + range(-300, 300);
     }
     o.angle = Math.atan2(dx, -dy);
@@ -204,14 +168,13 @@ export function updatePolice(dt, player, game) {
     resolveCollision(o, 10);
   }
 
-  // Arrest meter: fills when a unit is close and Rio is slow or on foot.
   const suspectSpeed = player.car ? Math.abs(player.car.speed) : Math.hypot(player.vx || 0, player.vy || 0);
   let closeUnit = false;
   for (const car of police.cars) {
     if (Math.hypot(car.x - px, car.y - py) < WANTED.arrestRadius + 26) closeUnit = true;
   }
   for (const o of police.officers) {
-    if (o.state !== 'down' && Math.hypot(o.x - px, o.y - py) < WANTED.arrestRadius) closeUnit = true;
+    if (Math.hypot(o.x - px, o.y - py) < WANTED.arrestRadius) closeUnit = true;
   }
   if (police.stars > 0 && closeUnit && suspectSpeed < 55) {
     police.arrest = clamp(police.arrest + WANTED.arrestFillPerSec * dt, 0, 1);
@@ -219,7 +182,6 @@ export function updatePolice(dt, player, game) {
     police.arrest = clamp(police.arrest - WANTED.arrestDrainPerSec * dt, 0, 1);
   }
 
-  // Heat bookkeeping.
   if (seen) {
     police.unseenT = 0;
   } else {
@@ -237,5 +199,3 @@ export function updatePolice(dt, player, game) {
   }
   return { seen };
 }
-
-export { CRIME_HEAT };

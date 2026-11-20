@@ -1,7 +1,7 @@
-// Keyboard, mouse and touch input.
-// A single state object the simulation samples each tick; edge-triggered
-// actions are exposed through a small pressed-set that game code drains.
-// v2 adds the number row (weapon slots and shop menus) and Q (reload).
+// Input layer: held keys in `keys`, one-tick edges in `pressed`.
+// The simulation drains `pressed` completely every tick (see game.js),
+// so an edge can never survive into a later tick and fire stale —
+// that is what stops an old J press from auto-starting a race.
 
 export const keys = Object.create(null);
 export const pressed = new Set();
@@ -29,13 +29,13 @@ export function initInput(canvas) {
   window.addEventListener('keyup', (e) => { keys[e.code] = false; });
   window.addEventListener('blur', () => {
     for (const k of Object.keys(keys)) keys[k] = false;
+    pressed.clear();
   });
 
   canvas.addEventListener('pointerdown', () => {
     pressed.add('MousePunch');
   });
 
-  // Touch buttons: shown after the first touch anywhere on the page.
   window.addEventListener('touchstart', () => {
     touchSeen = true;
     document.body.classList.add('has-touch');
@@ -85,4 +85,7 @@ export function consume(code) {
 export function anyPressed(...codes) {
   for (const c of codes) if (consume(c)) return true;
   return false;
+}
+export function drainPressed() {
+  pressed.clear();
 }

@@ -1,8 +1,5 @@
-// Boot + frame loop for Vice Harbor — Port Serena.
-// Fixed-timestep simulation at 60 Hz with an accumulator, render on
-// every animation frame, and a debug handle for the playtest that
-// exposes the v2 state (shops, arsenal, armor, enemies) alongside
-// the original fields.
+// Boot, frame loop and the window.ViceHarbor debug handle.
+// Fixed-timestep simulation at 60 Hz; rendering follows rAF.
 
 import { initInput, pressed } from './input.js';
 import { game } from './game.js';
@@ -10,7 +7,6 @@ import { render } from './render.js';
 import { parseShotRequest, stageScene } from './shots.js';
 import { police, setWantedLevel } from './police.js';
 import { missions, startJobStep } from './missions.js';
-import { enemiesStanding } from './weapons.js';
 import { districtAt } from './world.js';
 import { audio } from './audio.js';
 
@@ -18,7 +14,6 @@ const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 
 function fitCanvas() {
-  // Internal resolution stays 960x600; CSS stretches it to the screen.
   canvas.width = 960;
   canvas.height = 600;
 }
@@ -35,7 +30,6 @@ if (shotRequest) {
   stageScene(game, shotRequest);
 }
 
-// Title-screen buttons + first-gesture audio unlock.
 canvas.addEventListener('pointerdown', (e) => {
   audio.init();
   audio.resume();
@@ -54,7 +48,7 @@ window.addEventListener('keydown', (e) => {
   audio.init();
   audio.resume();
   if (game.state === 'title' && (e.code === 'Enter' || e.code === 'Space')) {
-    game.startGame(!game.hasSave() ? true : false);
+    game.startGame(!game.hasSave());
     pressed.delete(e.code);
   } else if (game.state === 'paused' && (e.code === 'KeyP' || e.code === 'Escape')) {
     game.resume();
@@ -62,7 +56,6 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
-// Fixed-step loop.
 let last = performance.now();
 let accumulator = 0;
 const STEP = 1 / 60;
@@ -92,7 +85,7 @@ function frame(now) {
 }
 requestAnimationFrame(frame);
 
-// Debug / playtest handle.
+// Debug / playtest surface. getState returns plain data only.
 window.ViceHarbor = {
   getState() {
     const p = game.player;
@@ -111,28 +104,28 @@ window.ViceHarbor = {
       jobDone: missions.done,
       inCar: !!p.car,
       health: Math.round(p.health),
-      state: game.state,
-      hour: game.hour,
-      // v2 additions
-      shop: game.shop ? game.shop.type : null,
-      weaponsOwned: Object.keys(game.weaponsOwned).filter((id) => game.weaponsOwned[id]),
-      ammo: game.ammo,
       armor: Math.round(p.armor),
       weapon: p.weapon,
-      mods: game.mods,
-      enemies: enemiesStanding(game),
-      enemiesDown: game.enemiesDownTotal,
-      // phase-2 additions
-      race: game.raceState,
-      lastRace: game.lastRace,
-      crew: game.crew.map((m) => ({ name: m.name, state: m.state, inCar: m.inCar })),
+      weaponsOwned: Object.keys(game.weaponsOwned).filter((k) => game.weaponsOwned[k]),
+      ammo: JSON.parse(JSON.stringify(game.ammo)),
+      mods: { ...game.mods },
+      shop: game.shop,
+      enemies: game.enemies.filter((e) => e.state !== 'down').length,
+      enemiesDown: game.enemiesDown,
       station: audio.stationName(),
+      race: game.raceState
+        ? { phase: game.raceState.phase, idx: game.raceState.idx, total: game.raceState.race.checkpoints.length, name: game.raceState.race.name }
+        : null,
+      lastRace: game.lastRace ? { ...game.lastRace } : null,
+      crew: game.crew.map((m) => ({ name: m.name, x: Math.round(m.x), y: Math.round(m.y), health: Math.round(m.health), down: m.state === 'down', mode: m.mode })),
+      state: game.state,
+      hour: game.hour,
     };
   },
   startGame() { game.startGame(true); },
   setWanted(n) { setWantedLevel(n); },
-  save() { game.save(); },
   startStep() { startJobStep(game); },
-  missions,
+  save() { game.save(); },
   game,
+  missions,
 };

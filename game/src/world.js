@@ -1,20 +1,18 @@
-// Port Serena world definition.
-// Builds the road network, building footprints, beach, pier, props and
-// the four stunt ramps from the district table. Pure data — the
-// renderer and the collision solver both read from here.
+// Port Serena's static layout: avenues, buildings, beach, pier,
+// props and the four stunt ramps. Pure data built once at boot.
 
 import { WORLD, DISTRICTS } from './config.js';
-import { makeRng, pick } from './random.js';
+import { makeRng } from './random.js';
 
 export const world = {
-  buildings: [],   // {x,y,w,h,hue,floors,name?,district}
-  colliders: [],   // solid AABBs the player and cars respect
+  buildings: [],
+  colliders: [],
   palms: [],
   lamps: [],
   props: [],
-  ramps: [],       // stunt ramps {x,y,w,h,angle} — angle = travel direction
-  roadsX: [],      // vertical avenue centre lines
-  roadsY: [],      // horizontal street centre lines
+  ramps: [],
+  roadsX: [],
+  roadsY: [],
   beach: null,
   ocean: null,
   pier: null,
@@ -22,20 +20,20 @@ export const world = {
   spawn: { x: 1250, y: 420 },
 };
 
-const BUILDING_NAMES = [
+const NAMES = [
   'Cafe Serena', 'Hotel Palma', 'Bea\'s Kitchen', 'Neon Arcade', 'Marina Books',
   'Sunset Laundry', 'Pier Nine Diner', 'Harbor Bank', 'Lulu\'s Records',
   'Dockside Gym', 'Coral Pharmacy', 'Vista Apartments', 'Old Town Hall',
   'University Library', 'Lecture Hall B', 'Student Union', 'Tide Gallery',
   'Boardwalk Fries', 'Shell Shop', 'Ferry Office', 'Customs House',
   'Crane Yard Office', 'Warehouse 4', 'Warehouse 7', 'Cold Storage',
+  'Serena Munitions', 'Serena Customs',
 ];
 
 export function districtAt(x, y) {
   for (const d of DISTRICTS) {
     if (x >= d.x && x < d.x + d.w && y >= d.y && y < d.y + d.h) return d;
   }
-  // South strip is beach / boardwalk edge.
   if (y >= 1650) return DISTRICTS[4];
   return DISTRICTS[0];
 }
@@ -56,21 +54,26 @@ export function buildWorld() {
   world.props.length = 0;
   world.ramps.length = 0;
 
-  // Avenue / street centre lines.
   world.roadsX = [];
   world.roadsY = [];
   for (let x = 200; x < WORLD.width; x += WORLD.roadGap) world.roadsX.push(x);
   for (let y = 200; y < 1700; y += WORLD.roadGap) world.roadsY.push(y);
-  // Ocean Drive runs along the beach.
-  world.roadsY.push(1560);
+  world.roadsY.push(1560); // Ocean Drive
 
-  // Water + sand along the southern edge.
   world.beach = { x: 0, y: 1650, w: WORLD.width, h: 190 };
   world.ocean = { x: 0, y: 1840, w: WORLD.width, h: WORLD.height - 1840 };
-  world.pier = { x: 2380, y: 1650, w: 90, h: 420 }; // Pier Nine
-  world.islet = { x: 620, y: 2050, w: 340, h: 150 }; // causeway islet
+  world.pier = { x: 2380, y: 1650, w: 90, h: 420 };
+  world.islet = { x: 620, y: 2050, w: 340, h: 150 };
 
-  // Buildings: fill each block with 2x2 footprints, skipping some lots.
+  // Stunt ramps sit squarely on avenues. The first one is on the
+  // eastbound run at y=600, a short drive east of x=1120.
+  world.ramps.push(
+    { x: 1245, y: 600, w: 84, h: 92 },
+    { x: 2000, y: 200, w: 84, h: 92 },
+    { x: 1000, y: 1400, w: 84, h: 92 },
+    { x: 2800, y: 1000, w: 84, h: 92 },
+  );
+
   let nameIdx = 0;
   const block = WORLD.blockSize;
   for (let bx = 0; bx < WORLD.width - 100; bx += WORLD.roadGap) {
@@ -79,7 +82,7 @@ export function buildWorld() {
       const oy = by + WORLD.roadWidth / 2 + 14;
       for (let i = 0; i < 2; i++) {
         for (let j = 0; j < 2; j++) {
-          if (rng() < 0.16) continue; // empty lot / plaza
+          if (rng() < 0.16) continue;
           const w = 110 + rng() * 30;
           const h = 110 + rng() * 30;
           const x = ox + i * (block / 2) + 6;
@@ -91,8 +94,9 @@ export function buildWorld() {
             x, y, w, h,
             hue: Math.floor(rng() * 360),
             floors: 2 + Math.floor(rng() * 5),
+            seed: Math.floor(rng() * 100000),
             district: d.id,
-            name: named ? BUILDING_NAMES[nameIdx++ % BUILDING_NAMES.length] : null,
+            name: named ? NAMES[nameIdx++ % NAMES.length] : null,
           };
           world.buildings.push(b);
           world.colliders.push({ x, y, w, h });
@@ -101,21 +105,17 @@ export function buildWorld() {
     }
   }
 
-  // Palms cluster on Palm Row, the Boardwalk and the beach fringe.
   for (let i = 0; i < 150; i++) {
     const x = rng() * WORLD.width;
     const y = 150 + rng() * 1550;
     if (isOnRoad(x, y, 12)) continue;
     world.palms.push({ x, y, s: 0.8 + rng() * 0.6, lean: (rng() - 0.5) * 0.4 });
   }
-  // Street lamps at intersections.
   for (const rx of world.roadsX) {
     for (const ry of world.roadsY) {
       world.lamps.push({ x: rx + WORLD.roadWidth / 2 + 8, y: ry + WORLD.roadWidth / 2 + 8 });
     }
   }
-  // Dock props: crates and containers in the Port Docks — this yard is
-  // where the Ferro crew makes its stand in job seven.
   for (let i = 0; i < 36; i++) {
     const x = 2150 + rng() * 950;
     const y = 950 + rng() * 620;
@@ -124,49 +124,30 @@ export function buildWorld() {
     world.props.push(crate);
     world.colliders.push({ x: crate.x, y: crate.y, w: crate.w, h: crate.h });
   }
-  // Pier is solid except its walkway spine.
   world.colliders.push({ x: world.pier.x - 14, y: world.pier.y, w: 14, h: world.pier.h });
   world.colliders.push({ x: world.pier.x + world.pier.w, y: world.pier.y, w: 14, h: world.pier.h });
-
-  // Stunt ramps. Angle follows the game's heading convention:
-  // forward = (sin a, -cos a), so east is PI/2, west -PI/2, south PI.
-  world.ramps.push(
-    { x: 1470, y: 600,  w: 76, h: 46, angle: Math.PI / 2 },  // Palm Row eastbound
-    { x: 2400, y: 1560, w: 76, h: 46, angle: -Math.PI / 2 }, // Ocean Drive westbound
-    { x: 2000, y: 1240, w: 46, h: 76, angle: Math.PI },      // University Ave southbound
-    { x: 2650, y: 1000, w: 76, h: 46, angle: Math.PI / 2 },  // Docks eastbound
-  );
-
   return world;
 }
 
 export function collideRect(px, py, r) {
-  // Returns true when a circle at px,py with radius r hits a solid.
   for (const c of world.colliders) {
     if (px + r > c.x && px - r < c.x + c.w && py + r > c.y && py - r < c.y + c.h) return true;
   }
   return false;
 }
 
-export function segmentBlocked(x0, y0, x1, y1) {
-  // Cheap line-of-sight test for gunfire: sample the segment and ask
-  // whether any sample lands inside a solid. Buildings and dock
-  // containers block shots; nothing else does.
-  const d = Math.hypot(x1 - x0, y1 - y0);
-  const steps = Math.max(1, Math.ceil(d / 14));
+// Segment vs buildings, sampled — used for gunfire line-of-sight.
+export function lineBlocked(x1, y1, x2, y2) {
+  const d = Math.hypot(x2 - x1, y2 - y1);
+  const steps = Math.max(2, Math.floor(d / 16));
   for (let i = 1; i < steps; i++) {
     const t = i / steps;
-    const x = x0 + (x1 - x0) * t;
-    const y = y0 + (y1 - y0) * t;
-    for (const c of world.colliders) {
-      if (x > c.x && x < c.x + c.w && y > c.y && y < c.y + c.h) return true;
-    }
+    if (collideRect(x1 + (x2 - x1) * t, y1 + (y2 - y1) * t, 3)) return true;
   }
   return false;
 }
 
 export function resolveCollision(ent, r) {
-  // Push an entity out of solids along the smallest penetration axis.
   for (const c of world.colliders) {
     const nx = Math.max(c.x, Math.min(ent.x, c.x + c.w));
     const ny = Math.max(c.y, Math.min(ent.y, c.y + c.h));
@@ -175,13 +156,12 @@ export function resolveCollision(ent, r) {
     const d2 = dx * dx + dy * dy;
     if (d2 < r * r) {
       const d = Math.sqrt(d2) || 0.001;
-      const push = (r - d) / d;
       if (d2 === 0) { ent.y = c.y - r - 1; continue; }
+      const push = (r - d) / d;
       ent.x += dx * push;
       ent.y += dy * push;
     }
   }
-  // Keep everyone inside the map and out of deep water.
   ent.x = Math.max(r, Math.min(WORLD.width - r, ent.x));
   ent.y = Math.max(r, Math.min(1836 - r, ent.y));
 }
@@ -199,4 +179,4 @@ export function nearestRoadPoint(x, y) {
   return best;
 }
 
-export { isOnRoad, pick };
+export { isOnRoad };
