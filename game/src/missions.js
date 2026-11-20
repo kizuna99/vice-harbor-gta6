@@ -1,284 +1,177 @@
-// Auntie Bea's job list — eight jobs in strict sequence.
-// Steps carry a world target the HUD, minimap and light pillar point
-// at. Two step kinds break the mould: `combat` steps spawn waves of
-// gunmen that must all go down, and the `escape` finale locks Rio's
-// heat at four stars until he reaches the safehouse.
+// missions.js — Auntie Bea's book of jobs, plus the two nights that follow
+// it. A job is a list of steps; a step is a place to reach, a fight to
+// finish, or a pursuit to outrun. The system arms a step, watches it, pays
+// out, and moves on. Timers fail the STEP, never the whole job.
 
-import { MISSION_REWARDS } from './config.js';
-import { makeVehicle } from './entities.js';
-import { makeEnemy } from './weapons.js';
-import { resolveCollision } from './world.js';
+import { HEAT_LOCK_RUN } from './config.js';
+import { makeGunman } from './combat.js';
+
+const gotoStep = (x, y, label, opts = {}) => ({ kind: 'goto', x, y, r: opts.r || 92, label, time: opts.time || 0, heat: opts.heat || 0 });
 
 export const JOBS = [
-  {
-    title: 'First Run for Bea',
-    brief: 'Take the package from Bea\'s Kitchen to the Ferry Office at Serena Marina.',
-    steps: [
-      { label: 'Pick up the package at Bea\'s Kitchen', x: 1250, y: 430, r: 44, mode: 'foot' },
-      { label: 'Deliver to the Ferry Office, Serena Marina', x: 620, y: 1180, r: 52, mode: 'any' },
-    ],
-  },
-  {
-    title: 'Neon Rush',
-    brief: 'Hit all five checkpoints before the clock runs out. Dusk racing, Bea style.',
-    steps: [
-      { label: 'Checkpoint 1 — Palm Row lights', x: 1400, y: 200, r: 56, mode: 'car', timer: 95 },
-      { label: 'Checkpoint 2 — University gate', x: 2600, y: 200, r: 56, mode: 'car' },
-      { label: 'Checkpoint 3 — Customs House', x: 2600, y: 1000, r: 56, mode: 'car' },
-      { label: 'Checkpoint 4 — Boardwalk Fries', x: 1400, y: 1000, r: 56, mode: 'car' },
-      { label: 'Finish at Bea\'s Kitchen', x: 1250, y: 430, r: 56, mode: 'car' },
-    ],
-  },
-  {
-    title: 'Hot Solano',
-    brief: 'A marked Solano GT is parked near the University. Take it to Warehouse 7 in the docks.',
-    steps: [
-      { label: 'Steal the marked Solano GT', x: 2380, y: 560, r: 60, mode: 'any', spawnSolano: true, needMissionCar: true },
-      { label: 'Deliver the Solano to Warehouse 7', x: 2760, y: 1330, r: 58, mode: 'car', needModel: 'solano' },
-    ],
-  },
-  {
-    title: 'VIP to the Marina',
-    brief: 'Singer Lulu Mar is waiting at the Hotel Palma. Ferry her to Serena Marina, fast and intact.',
-    steps: [
-      { label: 'Pick up Lulu Mar at Hotel Palma', x: 1560, y: 430, r: 52, mode: 'car' },
-      { label: 'Drop Lulu at Serena Marina', x: 700, y: 1250, r: 56, mode: 'car', timer: 110, passenger: true },
-    ],
-  },
-  {
-    title: 'Beach Money',
-    brief: 'Three debtors left cash along the Boardwalk. Collect all three on foot.',
-    steps: [
-      { label: 'Collect cash — Shell Shop', x: 1500, y: 1520, r: 36, mode: 'foot' },
-      { label: 'Collect cash — Ocean Drive palms', x: 1900, y: 1560, r: 36, mode: 'foot' },
-      { label: 'Collect cash — Boardwalk west end', x: 1180, y: 1500, r: 36, mode: 'foot' },
-    ],
-  },
-  {
-    title: 'Serena Send-Off',
-    brief: 'Grab the Dockmaster at the Port Docks and make the run to the end of Pier Nine.',
-    steps: [
-      { label: 'Reach the Port Docks loading yard', x: 2900, y: 1420, r: 58, mode: 'any' },
-      { label: 'Getaway: reach the end of Pier Nine', x: 2425, y: 1980, r: 62, mode: 'car', timer: 120, heatOnStart: 90 },
-    ],
-  },
-  {
-    title: 'Dockside Crossfire',
-    brief: 'Ferro\'s crew jumped the strongbox crew at the docks. Clear every wave, then bring the box to Bea.',
-    steps: [
-      { label: 'Reach the Port Docks loading yard', x: 2900, y: 1420, r: 58, mode: 'any' },
-      { label: 'Dockside Crossfire — clear all three waves', x: 2790, y: 1470, r: 60, mode: 'foot', type: 'combat', waves: [3, 3, 4] },
-      { label: 'Bring the strongbox to Bea\'s Kitchen', x: 1250, y: 430, r: 56, mode: 'any' },
-    ],
-  },
-  {
-    title: 'Searchlight Run',
-    brief: 'Air One has Rio lit up at four stars. Break line of sight and reach the Old Town safehouse.',
-    steps: [
-      { label: 'Reach the pickup east of the Boardwalk', x: 2600, y: 1180, r: 56, mode: 'any' },
-      { label: 'Searchlight Run — reach the Old Town safehouse', x: 200, y: 340, r: 74, mode: 'any', type: 'escape', heatLock: 170, timer: 170 },
-    ],
-  },
+  { title: 'First Drop', pay: 150, respect: 5, steps: [
+    gotoStep(1000, 1000, 'Pick up the package on University Row'),
+    gotoStep(1400, 1400, 'Drop it at the Midtown lockup'),
+  ] },
+  { title: 'Neon Rush', pay: 220, respect: 7, steps: [
+    gotoStep(600, 600, 'Checkpoint 1: Palm Row west', { time: 95 }),
+    gotoStep(1400, 600, 'Checkpoint 2: the ramp straight', { time: 95 }),
+    gotoStep(2200, 600, 'Checkpoint 3: Marina gates', { time: 95 }),
+    gotoStep(2200, 1400, 'Checkpoint 4: Customs corner', { time: 95 }),
+    gotoStep(1000, 1400, 'Checkpoint 5: Bea is watching', { time: 95 }),
+  ] },
+  { title: 'Golden Boy', pay: 300, respect: 9, steps: [
+    { kind: 'steal', x: 1800, y: 574, r: 90, label: 'Steal the marked Solano GT', time: 0, heat: 0 },
+    gotoStep(600, 1400, 'Lose the shine at the Old Town garage'),
+  ] },
+  { title: 'Lulu Mar, Live', pay: 340, respect: 10, steps: [
+    gotoStep(2400, 1000, 'Collect Lulu Mar from the Marina hotel', { time: 80 }),
+    gotoStep(600, 1800, 'Get her to the Boardwalk stage', { time: 80 }),
+  ] },
+  { title: 'Beach Money', pay: 380, respect: 12, steps: [
+    gotoStep(800, 2200, 'Collection 1: the first lifeguard stand'),
+    gotoStep(1400, 2200, 'Collection 2: under the pier sign'),
+    gotoStep(2000, 2200, 'Collection 3: the last cabana'),
+  ] },
+  { title: 'Serena Send-Off', pay: 520, respect: 14, steps: [
+    gotoStep(2900, 1420, 'Reach the Dockmaster at the Port Docks'),
+    gotoStep(1240, 2320, 'Outrun it all to Pier Nine', { time: 110, heat: 70 }),
+  ] },
+  { title: 'Dockside Crossfire', pay: 800, respect: 18, steps: [
+    gotoStep(2900, 1420, 'Walk into the docks yard'),
+    { kind: 'fight', x: 2820, y: 1500, r: 200, label: 'Survive the Ferro crew', time: 0, heat: 0 },
+    gotoStep(1250, 430, "Bring the strongbox to Bea's Corner"),
+  ] },
+  { title: 'Searchlight Run', pay: 1000, respect: 24, steps: [
+    gotoStep(2600, 1180, 'Trip the port alarm'),
+    { kind: 'escape', x: 200, y: 340, r: 105, label: 'Reach the Old Town safehouse', time: 170, heat: 0 },
+  ] },
 ];
 
-export const missions = {
-  jobIndex: 0,
-  stepIndex: 0,
-  timer: 0,
-  timerMax: 0,
-  done: false,
-  solanoCar: null,
-  passengerAboard: false,
-  message: '',
-  messageT: 0,
-  combatKey: '',
-  waveIndex: 0,
-  waveDelayT: 0,
-};
+// Where each wave of the crossfire comes over the fence.
+const WAVE_SPOTS = [
+  [[2652, 1470], [2652, 1560], [2980, 1452], [2900, 1600]],
+  [[2652, 1500], [2990, 1580], [2820, 1446]],
+  [[2995, 1470], [2652, 1430], [2880, 1610]],
+];
 
-export function currentStep() {
-  if (missions.done) return null;
-  const job = JOBS[missions.jobIndex];
-  return job ? job.steps[missions.stepIndex] : null;
-}
+export function createMissions() {
+  return {
+    jobIndex: 0,
+    stepIndex: 0,
+    done: false,       // whole book finished
+    jobDone: false,    // the current job just paid out
+    armed: false,
+    fightActive: false,
+    timer: 0,
+    wave: 0,
+    waveAlive: 0,
+    spawnedTotal: 0,
 
-export function currentJob() {
-  return missions.done ? null : JOBS[missions.jobIndex];
-}
+    job() { return JOBS[this.jobIndex] || null; },
+    step() { const j = this.job(); return j ? j.steps[this.stepIndex] || null : null; },
 
-export function showMessage(game, text, secs) {
-  missions.message = text;
-  missions.messageT = secs || 4;
-  game.bannerText = text;
-  game.bannerT = secs || 4;
-}
+    startStep(game) {
+      const step = this.step();
+      this.armed = true;
+      this.jobDone = false;
+      if (!step) return;
+      this.timer = step.time || 0;
+      if (step.heat) game.setHeatFloor(step.heat);
+      if (step.kind === 'fight') {
+        // Re-arming a fight that is already in the field must not stack a
+        // second copy of wave one on top of the first.
+        const anyAlive = game.enemies.some((e) => e.state !== 'down');
+        if (this.fightActive && anyAlive) return;
+        this.fightActive = true;
+        this.wave = 0;
+        this.spawnedTotal = 0;
+        this.spawnWave(game);
+      }
+      if (step.kind === 'escape') {
+        game.heatLock = HEAT_LOCK_RUN;
+        game.policeRef.heat = HEAT_LOCK_RUN;
+        this.timer = step.time || 170;
+      }
+    },
 
-function spawnWave(game, step, waveIdx) {
-  const count = step.waves[waveIdx];
-  const cx = step.x, cy = step.y;
-  for (let i = 0; i < count; i++) {
-    const a = (i / count) * Math.PI * 2 + waveIdx * 0.7;
-    const d = 120 + (i % 3) * 36;
-    const e = makeEnemy(cx + Math.cos(a) * d, cy + Math.sin(a) * d, i === 0 ? 'ferro' : 'gunman');
-    resolveCollision(e, 12);
-    game.enemies.push(e);
-  }
-  missions.waveIndex = waveIdx;
-  showMessage(game, `Wave ${waveIdx + 1} of ${step.waves.length} — ${count} hostiles!`, 3);
-}
+    spawnWave(game) {
+      const spots = WAVE_SPOTS[this.wave] || [];
+      for (const [x, y] of spots) {
+        game.enemies.push(makeGunman(x, y, this.wave === 2 ? 1.25 : 1));
+        this.spawnedTotal += 1;
+      }
+      this.waveAlive = spots.length;
+    },
 
-export function startJobStep(game) {
-  const step = currentStep();
-  if (!step) return;
-  missions.timer = step.timer || 0;
-  missions.timerMax = step.timer || 0;
-  if (step.spawnSolano && !missions.solanoCar) {
-    const car = makeVehicle(1, step.x, step.y, Math.PI / 2, '#d92632');
-    car.parked = true; car.driver = false;
-    car.isMissionCar = true;
-    missions.solanoCar = car;
-    game.cars.push(car);
-  }
-  if (step.heatOnStart) game.addHeat(step.heatOnStart);
-  if (step.heatLock) {
-    game.policeRef.heat = step.heatLock;
-    game.policeRef.stars = 4;
-  }
-  if (step.type === 'combat') {
-    const key = `${missions.jobIndex}:${missions.stepIndex}`;
-    if (missions.combatKey !== key) {
-      missions.combatKey = key;
-      missions.waveIndex = 0;
-      missions.waveDelayT = 0;
-      game.enemies.length = 0;
-      spawnWave(game, step, 0);
-    }
-  }
-}
-
-export function beginMissions(game) {
-  missions.jobIndex = 0;
-  missions.stepIndex = 0;
-  missions.done = false;
-  missions.solanoCar = null;
-  missions.passengerAboard = false;
-  missions.combatKey = '';
-  startJobStep(game);
-  const job = currentJob();
-  if (job) showMessage(game, `JOB: ${job.title} — ${job.brief}`, 6);
-}
-
-function stepModeOk(step, game) {
-  if (step.mode === 'car') return !!game.player.car;
-  if (step.mode === 'foot') return !game.player.car;
-  return true;
-}
-
-function advanceStep(game) {
-  const job = currentJob();
-  game.audio?.pickup();
-  missions.stepIndex++;
-  if (missions.stepIndex >= job.steps.length) {
-    const cash = MISSION_REWARDS.cash[missions.jobIndex];
-    const respect = MISSION_REWARDS.respect[missions.jobIndex];
-    game.cash += cash;
-    game.respect += respect;
-    game.jobsDone++;
-    game.audio?.cashRegister();
-    missions.jobIndex++;
-    missions.stepIndex = 0;
-    missions.passengerAboard = false;
-    missions.combatKey = '';
-    if (missions.jobIndex >= JOBS.length) {
-      missions.done = true;
-      showMessage(game, 'All jobs done. Port Serena is yours, Rio. Free roam!', 7);
-    } else {
-      const next = currentJob();
-      showMessage(game, `Job complete: +$${cash}, +${respect} respect. Next: ${next.title}`, 6);
-      startJobStep(game);
-    }
-    game.save();
-  } else {
-    if (currentStep()?.passenger) {
-      missions.passengerAboard = true;
-      showMessage(game, 'Lulu Mar is in. "Marina, darling — and step on it."', 4);
-    } else {
-      showMessage(game, `Step done. ${currentStep().label}`, 3.5);
-    }
-    startJobStep(game);
-    game.save();
-  }
-}
-
-export function updateMissions(dt, game) {
-  missions.messageT = Math.max(0, missions.messageT - dt);
-  const step = currentStep();
-  if (!step || game.player.dead || game.player.busted) return;
-
-  if (missions.timerMax > 0) {
-    missions.timer -= dt;
-    if (missions.timer <= 0) {
-      showMessage(game, 'Out of time — the step resets. Go again.', 4);
-      missions.timer = missions.timerMax;
-      game.audio?.fail();
-      return;
-    }
-  }
-
-  // Combat steps resolve on kills, not arrival.
-  if (step.type === 'combat') {
-    const alive = game.enemies.filter((e) => e.state !== 'down').length;
-    if (alive === 0) {
-      if (missions.waveIndex + 1 < step.waves.length) {
-        missions.waveDelayT -= dt;
-        if (missions.waveDelayT <= 0) {
-          spawnWave(game, step, missions.waveIndex + 1);
-          missions.waveDelayT = 0.9;
+    completeStep(game) {
+      const job = this.job();
+      game.cash += 0; // step payouts land on job completion, below
+      this.stepIndex += 1;
+      this.armed = false;
+      if (this.stepIndex >= job.steps.length) {
+        game.cash += job.pay;
+        game.respect += job.respect;
+        this.jobDone = true;
+        game.audio.cash();
+        game.banner(`Job done: ${job.title}  +$${job.pay}`);
+        this.jobIndex += 1;
+        this.stepIndex = 0;
+        if (this.jobIndex >= JOBS.length) {
+          this.done = true;
+          game.banner('Port Serena is yours. Free roam!');
         }
       } else {
-        showMessage(game, 'Strongbox secured. Get it to Bea.', 4);
-        advanceStep(game);
+        game.audio.blip();
       }
-    }
-    return;
-  }
+    },
 
-  if (step.needModel) {
-    const c = game.player.car;
-    if (!c || c.model.id !== step.needModel) {
-      const d = Math.hypot(game.player.x - step.x, game.player.y - step.y);
-      if (d < step.r + 30 && game.hintT <= 0) {
-        showMessage(game, 'Warehouse 7 only accepts the Solano GT.', 3);
-        game.hintT = 5;
+    failStep(game) {
+      game.banner('Out of time — the step resets');
+      this.armed = false;
+      if (this.step() && this.step().kind === 'escape') {
+        game.heatLock = 0;
+        game.setWanted(0);
       }
-      if (!(c && c.isMissionCar)) return;
-    }
-  }
+      this.startStep(game);
+    },
 
-  if (!stepModeOk(step, game)) return;
-  if (step.needMissionCar && game.player.car !== missions.solanoCar) return;
-
-  const px = game.player.car ? game.player.car.x : game.player.x;
-  const py = game.player.car ? game.player.car.y : game.player.y;
-  const d = Math.hypot(px - step.x, py - step.y);
-  if (d > step.r) return;
-
-  if (step.type === 'escape') {
-    // Reaching the safehouse scrubs the locked heat completely.
-    game.policeRef.heat = 0;
-    game.policeRef.stars = 0;
-    game.policeRef.cars.length = 0;
-    game.policeRef.officers.length = 0;
-    game.policeRef.heli = null;
-    game.policeRef.arrest = 0;
-  }
-  advanceStep(game);
-}
-
-export function objectiveDistance(game) {
-  const step = currentStep();
-  if (!step) return 0;
-  const px = game.player.car ? game.player.car.x : game.player.x;
-  const py = game.player.car ? game.player.car.y : game.player.y;
-  return Math.round(Math.hypot(px - step.x, py - step.y));
+    update(game, dt) {
+      if (this.done) return;
+      const step = this.step();
+      if (!step) return;
+      if (!this.armed) this.startStep(game);
+      if (step.time) {
+        this.timer -= dt;
+        if (this.timer <= 0) { this.failStep(game); return; }
+      }
+      const p = game.player;
+      if (step.kind === 'goto' || step.kind === 'escape') {
+        const d = Math.hypot(p.x - step.x, p.y - step.y);
+        if (d < step.r) {
+          if (step.kind === 'escape') {
+            game.heatLock = 0;
+            game.setWanted(0);
+            game.banner('The safehouse door slams. Silence.');
+          }
+          this.completeStep(game);
+        }
+      } else if (step.kind === 'steal') {
+        if (p.car && p.car.marked) this.completeStep(game);
+      } else if (step.kind === 'fight') {
+        const alive = game.enemies.reduce((n, e) => n + (e.state !== 'down' ? 1 : 0), 0);
+        if (alive === 0 && this.spawnedTotal > 0) {
+          if (this.wave < WAVE_SPOTS.length - 1) {
+            this.wave += 1;
+            game.banner(`Wave ${this.wave + 1} — over the fence!`);
+            this.spawnWave(game);
+          } else if (game.enemiesDown >= this.spawnedTotal) {
+            game.banner('The strongbox is yours');
+            this.fightActive = false;
+            this.completeStep(game);
+          }
+        }
+      }
+    },
+  };
 }

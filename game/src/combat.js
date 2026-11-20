@@ -1,92 +1,78 @@
-// Fists, damage (with kevlar absorbing 65%), and the two endings:
-// BUSTED at the SPD desk, WASTED on a Harbor Clinic gurney.
+// combat.js — the Dockside gunmen: how they move, when they fire, and why
+// they check the wall first. A gunman keeps his distance, strafes between
+// bursts, and only pulls the trigger with a clear line to Rio — a wall in
+// the way means he repositions instead of wasting the magazine.
 
-import { PLAYER, CRIME_HEAT } from './config.js';
-import { clamp } from './random.js';
-import { knockPed } from './entities.js';
-import { addHeat } from './police.js';
+import { angleTo, clamp, dirFrom } from './random.js';
+import { fireProjectile } from './weapons.js';
 
-export const CLINIC = { x: 640, y: 1080, name: 'Harbor Clinic' };
+export function makeGunman(x, y, tough = 1) {
+  return {
+    x, y, angle: 0,
+    hp: 55 * tough, maxHp: 55 * tough,
+    state: 'fight',
+    burstT: 1 + Math.random() * 1.4,  // time to next burst
+    burstLeft: 0,                      // rounds left in the current burst
+    burstGap: 0,                       // time between burst rounds
+    strafeDir: Math.random() < 0.5 ? -1 : 1,
+    strafeT: 2 + Math.random() * 2,
+    downT: 0,
+  };
+}
 
-export function tryPunch(game) {
+export function updateEnemies(game, dt) {
   const p = game.player;
-  if (p.car || p.punchT > 0 || p.dead || p.busted) return false;
-  p.punchT = PLAYER.punchCooldown;
-  p.punchAnim = 1;
-  game.audio?.punch();
-
-  const fx = Math.sin(p.angle), fy = -Math.cos(p.angle);
-  let hitSomething = false;
-
-  for (const ped of game.peds) {
-    if (ped.state === 'down') continue;
-    const dx = ped.x - p.x, dy = ped.y - p.y;
-    const d = Math.hypot(dx, dy);
-    if (d < PLAYER.punchRange + 8 && dx * fx + dy * fy > 0) {
-      knockPed(ped, p.angle);
-      game.spawnHitParticles(ped.x, ped.y);
-      addHeat(CRIME_HEAT.punch, game);
-      hitSomething = true;
-    }
-  }
   for (const e of game.enemies) {
-    if (e.state === 'down') continue;
-    const dx = e.x - p.x, dy = e.y - p.y;
-    const d = Math.hypot(dx, dy);
-    if (d < PLAYER.punchRange + 8 && dx * fx + dy * fy > 0) {
-      e.health -= PLAYER.punchDamage;
-      game.spawnHitParticles(e.x, e.y);
-      if (e.health <= 0) { e.state = 'down'; game.enemiesDown++; }
-      hitSomething = true;
+    if (e.state === 'down') { e.downT += dt; continue; }
+    const d = Math.hypot(p.x - e.x, p.y - e.y);
+    e.angle = angleTo(e.x, e.y, p.x, p.y);
+    const los = !game.world.lineBlocked(e.x, e.y, p.x, p.y);
+
+    // Movement: hold a fighting distance of roughly 170px, strafing
+    // sideways between bursts, sliding around walls when the line is shut.
+    e.strafeT -= dt;
+    if (e.strafeT <= 0) { e.strafeT = 1.6 + Math.random() * 2; e.strafeDir *= -1; }
+    let mx = 0, my = 0;
+    const dir = dirFrom(e.angle);
+    if (d > 205) { mx += dir.x; my += dir.y; }
+    else if (d < 130) { mx -= dir.x; my -= dir.y; }
+    if (los) { mx += -dir.y * e.strafeDir * 0.7; my += dir.x * e.strafeDir * 0.7; }
+    else { mx += dir.x * 0.8; my += dir.y * 0.8; }
+    const ml = Math.hypot(mx, my) || 1;
+    const speed = 96;
+    const fixed = game.world.collide(e.x + (mx / ml) * speed * dt, e.y + (my / ml) * speed * dt, 13);
+    e.x = fixed.x; e.y = fixed.y;
+
+    // Fire control: bursts of three, only with line of sight, and never
+    // while Rio is already down or the game is somewhere else.
+    if (game.state !== 'playing') continue;
+    if (e.burstLeft > 0) {
+      e.burstGap -= dt;
+      if (e.burstGap <= 0 && los) {
+        e.burstLeft -= 1;
+        e.burstGap = 0.11;
+        const spread = (Math.random() - 0.5) * 0.09;
+        fireProjectile(game, e.x, e.y, e.angle + spread, { speed: 540, range: 560, damage: 6, hostile: true });
+        game.audio.shot('smg');
+      }
+    } else {
+      e.burstT -= dt;
+      if (e.burstT <= 0) {
+        if (los && d < 430) { e.burstLeft = 3; e.burstGap = 0; }
+        e.burstT = 1.5 + Math.random() * 1.3;
+      }
     }
   }
-  for (const o of game.policeRef.officers) {
-    const dx = o.x - p.x, dy = o.y - p.y;
-    const d = Math.hypot(dx, dy);
-    if (d < PLAYER.punchRange + 6 && dx * fx + dy * fy > 0) {
-      o.x += fx * 26; o.y += fy * 26;
-      addHeat(CRIME_HEAT.punch * 2, game);
-      hitSomething = true;
-    }
-  }
-  return hitSomething;
-}
-
-// Kevlar soaks 65% of every hit until the vest is shredded; being in
-// a car soaks most of what is left before it reaches Rio.
-export function damagePlayer(game, amount) {
-  const p = game.player;
-  if (p.dead || p.busted) return;
-  let incoming = p.car ? amount * 0.35 : amount;
-  if (p.armor > 0) {
-    const absorbed = incoming * PLAYER.armorAbsorb;
-    const soaked = Math.min(p.armor, absorbed);
-    p.armor -= soaked;
-    incoming -= soaked;
-  }
-  p.health = clamp(p.health - incoming, 0, PLAYER.maxHealth);
-  game.shake = Math.min(14, (game.shake || 0) + amount * 0.22);
-  if (p.health <= 0) {
-    p.dead = true;
-    game.onWasted?.();
+  // Sweep the fallen out after a while so the field stays readable.
+  for (let i = game.enemies.length - 1; i >= 0; i--) {
+    if (game.enemies[i].state === 'down' && game.enemies[i].downT > 14) game.enemies.splice(i, 1);
   }
 }
 
-export function respawnAtClinic(game) {
-  const p = game.player;
-  const fee = Math.floor(game.cash * 0.10);
-  game.cash -= fee;
-  p.health = PLAYER.maxHealth;
-  p.dead = false;
-  p.busted = false;
-  p.car = null;
-  p.x = CLINIC.x; p.y = CLINIC.y;
-  game.lastClinicFee = fee;
-  return fee;
+export function enemyCount(game) {
+  let alive = 0, down = 0;
+  for (const e of game.enemies) (e.state === 'down' ? (down += 1) : (alive += 1));
+  return { alive, down };
 }
 
-export function bustedPenalty(game) {
-  const fine = Math.min(game.cash, 150 + game.policeRef.stars * 60);
-  game.cash -= fine;
-  return fine;
-}
+export const clampHp = (v, max) => clamp(v, 0, max);

@@ -1,91 +1,46 @@
-// Input layer: held keys in `keys`, one-tick edges in `pressed`.
-// The simulation drains `pressed` completely every tick (see game.js),
-// so an edge can never survive into a later tick and fire stale —
-// that is what stops an old J press from auto-starting a race.
+// input.js — keyboard and pointer state with an edge channel. `held` answers
+// "is it down right now"; `pressed` answers "did it go down since the last
+// tick". The game drains `pressed` at the end of EVERY tick, on every code
+// path — a stale edge left over from a shop panel or a cutscene must never
+// fire later (that was the phantom race-start bug: an old J edge starting a
+// race the moment Rio sat in a car near the marker).
 
-export const keys = Object.create(null);
-export const pressed = new Set();
+export function createInput(target) {
+  const held = new Set();
+  const pressed = new Set();
+  const virtual = new Set(); // touch-pad buttons feed the same sets
 
-const ACTION_KEYS = new Set([
-  'KeyE', 'KeyF', 'Enter', 'Space', 'KeyJ', 'KeyH', 'KeyN',
-  'KeyR', 'KeyP', 'KeyM', 'KeyQ', 'KeyC', 'Escape',
-  'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5',
-  'Digit6', 'Digit7', 'Digit8',
-]);
-
-let touchSeen = false;
-export function touchWasSeen() { return touchSeen; }
-
-export function initInput(canvas) {
-  window.addEventListener('keydown', (e) => {
-    if (!keys[e.code]) {
-      keys[e.code] = true;
-      if (ACTION_KEYS.has(e.code)) pressed.add(e.code);
-    }
-    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) {
-      e.preventDefault();
-    }
-  });
-  window.addEventListener('keyup', (e) => { keys[e.code] = false; });
-  window.addEventListener('blur', () => {
-    for (const k of Object.keys(keys)) keys[k] = false;
-    pressed.clear();
-  });
-
-  canvas.addEventListener('pointerdown', () => {
-    pressed.add('MousePunch');
-  });
-
-  window.addEventListener('touchstart', () => {
-    touchSeen = true;
-    document.body.classList.add('has-touch');
-  }, { passive: true });
-
-  bindTouchButtons();
-}
-
-function bindTouchButtons() {
-  const map = {
-    'btn-up': 'ArrowUp', 'btn-down': 'ArrowDown',
-    'btn-left': 'ArrowLeft', 'btn-right': 'ArrowRight',
-    'btn-act': 'KeyE', 'btn-punch': 'KeyJ', 'btn-brake': 'Space',
+  const down = (code) => {
+    if (!held.has(code)) pressed.add(code);
+    held.add(code);
   };
-  for (const [id, code] of Object.entries(map)) {
-    const el = document.getElementById(id);
-    if (!el) continue;
-    const on = (e) => {
-      e.preventDefault();
-      touchSeen = true;
-      document.body.classList.add('has-touch');
-      if (!keys[code]) { keys[code] = true; pressed.add(code); }
-    };
-    const off = (e) => { e.preventDefault(); keys[code] = false; };
-    el.addEventListener('touchstart', on, { passive: false });
-    el.addEventListener('touchend', off, { passive: false });
-    el.addEventListener('touchcancel', off, { passive: false });
-    el.addEventListener('mousedown', on);
-    el.addEventListener('mouseup', off);
-    el.addEventListener('mouseleave', off);
-  }
-}
+  const up = (code) => held.delete(code);
 
-export function axisX() {
-  return (keys['KeyD'] || keys['ArrowRight'] ? 1 : 0) - (keys['KeyA'] || keys['ArrowLeft'] ? 1 : 0);
-}
-export function axisY() {
-  return (keys['KeyS'] || keys['ArrowDown'] ? 1 : 0) - (keys['KeyW'] || keys['ArrowUp'] ? 1 : 0);
-}
-export function sprinting() {
-  return !!(keys['ShiftLeft'] || keys['ShiftRight']);
-}
-export function consume(code) {
-  if (pressed.has(code)) { pressed.delete(code); return true; }
-  return false;
-}
-export function anyPressed(...codes) {
-  for (const c of codes) if (consume(c)) return true;
-  return false;
-}
-export function drainPressed() {
-  pressed.clear();
+  target.addEventListener('keydown', (e) => {
+    if (e.repeat) return;
+    down(e.code);
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
+  });
+  target.addEventListener('keyup', (e) => up(e.code));
+  target.addEventListener('blur', () => { held.clear(); virtual.clear(); });
+
+  // A click counts as a J press (punch / race start) so mouse-only players
+  // get the same verbs; the edge drains exactly like a key edge.
+  target.addEventListener('pointerdown', () => down('KeyJ'));
+  target.addEventListener('pointerup', () => up('KeyJ'));
+
+  return {
+    isDown: (code) => held.has(code) || virtual.has(code),
+    wasPressed: (code) => pressed.has(code),
+    drain() { pressed.clear(); },
+    setVirtual(code, on) {
+      if (on) down(code); else up(code);
+      if (on) virtual.add(code); else virtual.delete(code);
+    },
+    axis() {
+      const x = (this.isDown('KeyD') || this.isDown('ArrowRight') ? 1 : 0) - (this.isDown('KeyA') || this.isDown('ArrowLeft') ? 1 : 0);
+      const y = (this.isDown('KeyS') || this.isDown('ArrowDown') ? 1 : 0) - (this.isDown('KeyW') || this.isDown('ArrowUp') ? 1 : 0);
+      return { x, y };
+    },
+  };
 }

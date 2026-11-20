@@ -1,444 +1,231 @@
-// Arsenal, gunfire, grenades, enemies and the two shops.
-// Serena Munitions sells the hardware; Serena Customs mods the car.
-// Projectiles are short-lived tracer objects tested against buildings,
-// people and vehicles every tick.
+// weapons.js — the arsenal: what Rio owns, what is loaded, and every bullet
+// and grenade in the air. Projectiles advance in small steps and test the
+// thing they might hit BEFORE the wall behind it, so a gunman standing in a
+// doorway still gets hit. Armour, explosions and heat live elsewhere; this
+// module asks the game to apply them.
 
-import { CRIME_HEAT, PLAYER } from './config.js';
-import { clamp } from './random.js';
-import { collideRect, lineBlocked } from './world.js';
-import { addHeat } from './police.js';
+import { WEAPON_DEFS } from './config.js';
+import { dirFrom } from './random.js';
 
-export const WEAPONS = {
-  fists: { name: 'Fists', slot: 5, damage: 34, interval: 0.32, magSize: 0, auto: false },
-  pistol: { name: 'Harbor Pistol', slot: 1, damage: 34, interval: 0.24, magSize: 12, speed: 720, auto: false },
-  smg: { name: 'Calle SMG', slot: 2, damage: 16, interval: 0.085, magSize: 30, speed: 760, auto: true },
-  shotgun: { name: 'Dockside Shotgun', slot: 3, damage: 17, pellets: 6, interval: 0.5, magSize: 6, speed: 680, auto: false },
-  grenade: { name: 'Grenade', slot: 4, damage: 95, interval: 0.5, magSize: 0, auto: false },
-};
-
-export const SLOT_ORDER = ['pistol', 'smg', 'shotgun', 'grenade', 'fists'];
-
-export const WEAPON_SHOP_ITEMS = [
-  { key: 'pistol', label: 'Harbor Pistol', price: 180 },
-  { key: 'smg', label: 'Calle SMG', price: 420 },
-  { key: 'shotgun', label: 'Dockside Shotgun', price: 350 },
-  { key: 'grenades', label: 'Grenades x3', price: 90 },
-  { key: 'ammoLight', label: 'Pistol + SMG ammo', price: 40 },
-  { key: 'ammoShells', label: 'Shotgun shells', price: 35 },
-  { key: 'health', label: 'Field dressing (full health)', price: 60 },
-  { key: 'armor', label: 'Kevlar vest', price: 150 },
-];
-
-export const GARAGE_ITEMS = [
-  { key: 'engine', label: 'Engine tune (+18% pace)', price: 300 },
-  { key: 'plating', label: 'Body plating (half crash damage)', price: 350 },
-  { key: 'repair', label: 'Full repair', price: 150 },
-  { key: 'respray', label: 'Respray (fresh colour)', price: 100 },
-];
-
-export function defaultAmmo() {
+export function createArsenal() {
   return {
-    pistol: { mag: 0, reserve: 0 },
-    smg: { mag: 0, reserve: 0 },
-    shotgun: { mag: 0, reserve: 0 },
-    grenade: { mag: 0, reserve: 0 },
+    owned: { fists: true },
+    ammo: {
+      pistol: { mag: 12, reserve: 48 },
+      smg: { mag: 30, reserve: 120 },
+      shotgun: { mag: 6, reserve: 24 },
+      grenade: { mag: 0, reserve: 0 },
+    },
+    projectiles: [],   // {x,y,vx,vy,life,damage,hostile,tracer}
+    shells: [],        // live grenades {x,y,vx,vy,fuse}
+    fireTimer: 0,
   };
 }
 
-export function switchWeapon(game, id) {
-  if (!WEAPONS[id]) return false;
-  if (id !== 'fists' && !game.weaponsOwned[id]) return false;
-  game.player.weapon = id;
-  game.player.reloadT = 0;
-  return true;
-}
+const SLOT_KEYS = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5'];
+const BY_SLOT = {};
+for (const [id, def] of Object.entries(WEAPON_DEFS)) BY_SLOT[def.slot] = id;
 
-function fireOne(game, from, angle, spec, owner) {
-  const spread = spec.pellets ? (Math.random() - 0.5) * 0.16 : (Math.random() - 0.5) * 0.03;
-  const a = angle + spread;
-  game.projectiles.push({
-    x: from.x + Math.sin(angle) * 14,
-    y: from.y - Math.cos(angle) * 14,
-    vx: Math.sin(a) * spec.speed,
-    vy: -Math.cos(a) * spec.speed,
-    life: 0.85,
-    damage: spec.damage,
-    owner,
+export function fireProjectile(game, x, y, angle, opts) {
+  const d = dirFrom(angle);
+  game.arsenal.projectiles.push({
+    x: x + d.x * 16, y: y + d.y * 16,
+    vx: d.x * opts.speed, vy: d.y * opts.speed,
+    life: opts.range / opts.speed,
+    damage: opts.damage,
+    hostile: !!opts.hostile,
+    tracer: opts.tracer !== false,
   });
+  game.spawnParticles(x + d.x * 18, y + d.y * 18, 2, { color: '#ffd76a', speed: 60, life: 0.12, size: 2 });
 }
 
-export function spawnEnemyShot(game, enemy, spec) {
-  fireOne(game, enemy, enemy.angle, spec, 'enemy');
-}
-
-// One attack tick for Rio. Edge-triggered weapons read the drained
-// pressed set through `attackEdge`; the SMG reads the held key.
-export function updatePlayerAttack(game, dt, attackEdge, attackHeld) {
-  const p = game.player;
-  p.fireT = Math.max(0, p.fireT - dt);
-  if (p.reloadT > 0) {
-    p.reloadT -= dt;
-    if (p.reloadT <= 0) finishReload(game);
-    return;
-  }
-  if (p.car) return;
-  const id = p.weapon || 'fists';
-  const spec = WEAPONS[id];
-  if (id === 'fists') {
-    if (attackEdge) game.tryPunchNow?.();
-    return;
-  }
-  const ammo = game.ammo[id];
-  if (!ammo) return;
-  if (id === 'grenade') {
-    if (attackEdge && ammo.mag > 0 && p.fireT <= 0) {
-      ammo.mag--;
-      p.fireT = spec.interval;
-      const fx = Math.sin(p.angle), fy = -Math.cos(p.angle);
-      game.grenades.push({
-        x: p.x + fx * 16, y: p.y + fy * 16,
-        vx: fx * 300, vy: fy * 300,
-        fuse: 0.75,
-      });
-      game.audio?.throw?.();
-    }
-    return;
-  }
-  const wantFire = spec.auto ? attackHeld : attackEdge;
-  if (!wantFire || p.fireT > 0) return;
-  if (ammo.mag <= 0) {
-    p.fireT = 0.25;
-    startReload(game);
-    return;
-  }
-  ammo.mag--;
-  p.fireT = spec.interval;
-  const shots = spec.pellets || 1;
-  for (let i = 0; i < shots; i++) fireOne(game, p, p.angle, spec, 'player');
-  game.audio?.shoot?.(id);
-  addHeat(CRIME_HEAT.gunshot, game);
-  // Muzzle particles.
-  for (let i = 0; i < 3; i++) game.spawnParticle(p.x + Math.sin(p.angle) * 18, p.y - Math.cos(p.angle) * 18, '#ffd166');
-}
-
-export function startReload(game) {
-  const p = game.player;
-  const id = p.weapon;
-  const spec = WEAPONS[id];
-  if (!spec || !spec.magSize) return false;
-  const ammo = game.ammo[id];
-  if (!ammo || ammo.reserve <= 0 || ammo.mag >= spec.magSize || p.reloadT > 0) return false;
-  p.reloadT = 0.9;
-  game.audio?.reload?.();
-  return true;
-}
-
-function finishReload(game) {
-  const p = game.player;
-  const spec = WEAPONS[p.weapon];
-  if (!spec || !spec.magSize) return;
-  const ammo = game.ammo[p.weapon];
-  const need = spec.magSize - ammo.mag;
-  const take = Math.min(need, ammo.reserve);
-  ammo.mag += take;
-  ammo.reserve -= take;
-}
-
-export function updateGrenades(game, dt) {
-  for (let i = game.grenades.length - 1; i >= 0; i--) {
-    const g = game.grenades[i];
-    g.x += g.vx * dt;
-    g.y += g.vy * dt;
-    g.vx *= 0.94; g.vy *= 0.94;
-    g.fuse -= dt;
-    if (g.fuse <= 0) {
-      game.grenades.splice(i, 1);
-      explodeAt(game, g.x, g.y, 95, 'player');
-    }
-  }
-}
-
-export function explodeAt(game, x, y, damage, owner) {
-  game.audio?.explosion?.();
-  game.shake = Math.min(16, (game.shake || 0) + 8);
-  for (let i = 0; i < 26; i++) {
-    const a = Math.random() * Math.PI * 2;
-    const sp = 50 + Math.random() * 190;
-    game.particles.push({
-      x, y,
-      vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
-      life: 0.9 + Math.random() * 0.5, maxLife: 1.4,
-      color: ['#ffb347', '#ff5e3a', '#ffd166', '#8d99ae'][i % 4],
-      size: 3 + Math.random() * 4,
-    });
-  }
-  const R = 92;
+// A blast hurts everything in the radius, wrecks cars, and can cook a
+// wreck's fuel tank into a second blast a moment later (the game schedules
+// those). Returns nothing; the mess is the point.
+export function explodeAt(game, x, y, radius, damage) {
+  game.spawnParticles(x, y, 26, { color: '#ff9a3c', speed: 260, life: 0.8, size: 4 });
+  game.spawnParticles(x, y, 14, { color: '#5a5a5a', speed: 120, life: 1.5, size: 6 });
+  game.audio.boom();
+  game.shake = Math.min(14, game.shake + 9);
+  const hurt = (ent, mult = 1) => {
+    const d = Math.hypot(ent.x - x, ent.y - y);
+    if (d < radius + 14) return damage * mult * (1 - (d / (radius + 14)) * 0.55);
+    return 0;
+  };
+  const pd = hurt(game.player);
+  if (pd > 0 && !game.player.car) game.damagePlayer(pd);
   for (const e of game.enemies) {
     if (e.state === 'down') continue;
-    const d = Math.hypot(e.x - x, e.y - y);
-    if (d < R) hurtEnemy(game, e, damage * (1 - d / (R * 1.6)));
-  }
-  for (const ped of game.peds) {
-    const d = Math.hypot(ped.x - x, ped.y - y);
-    if (d < R && ped.state !== 'down') { ped.state = 'down'; ped.downT = 4; ped.health -= 60; }
+    const ed = hurt(e);
+    if (ed > 0) game.hurtEnemy(e, ed);
   }
   for (const m of game.crew) {
-    const d = Math.hypot(m.x - x, m.y - y);
-    if (d < R && m.state !== 'down') hurtCrew(game, m, damage * 0.5);
+    if (m.state === 'down') continue;
+    const md = hurt(m, 0.7);
+    if (md > 0) game.hurtCrew(m, md);
   }
-  const pd = Math.hypot(game.player.x - x, game.player.y - y);
-  if (pd < R && owner !== 'player') game.hurtPlayer?.(damage * 0.6 * (1 - pd / (R * 1.5)));
-  if (pd < R && owner === 'player' && pd < 34) game.hurtPlayer?.(damage * 0.25);
-  for (const car of [...game.cars, ...game.policeRef.cars]) {
-    const d = Math.hypot(car.x - x, car.y - y);
-    if (d < R + 20 && !car.wrecked) damageCar(game, car, damage * (1 - d / (R * 2)));
+  for (const c of game.cars) {
+    if (c.wrecked) continue;
+    const cd = hurt(c);
+    if (cd > 0) game.damageCar(c, cd, true);
   }
+  for (const p of game.peds) {
+    if (p.down) continue;
+    if (hurt(p) > 12) { p.down = true; p.downTimer = 9; }
+  }
+  game.addHeat(9);
 }
 
-export function damageCar(game, car, amount) {
-  if (car.wrecked) return;
-  car.damage += car.plated ? amount * 0.5 : amount;
-  if (car.damage >= 120 && car.explodeT <= 0) {
-    car.explodeT = 0.4; // cook-off delay — neighbours can chain
-  }
+function throwGrenade(game) {
+  const p = game.player;
+  const a = game.arsenal.ammo.grenade;
+  if (a.mag <= 0) { game.audio.dryFire(); return; }
+  a.mag -= 1;
+  const d = dirFrom(p.angle);
+  game.arsenal.shells.push({ x: p.x + d.x * 14, y: p.y + d.y * 14, vx: d.x * 330, vy: d.y * 330, fuse: WEAPON_DEFS.grenade.fuse });
+  game.audio.shot('throw');
 }
 
-export function updateCarExplosions(game, dt) {
-  const all = [...game.cars, ...game.policeRef.cars];
-  for (const car of all) {
-    if (car.explodeT > 0 && !car.wrecked) {
-      car.explodeT -= dt;
-      if (car.explodeT <= 0) {
-        car.wrecked = true;
-        car.speed = 0;
-        if (game.player.car === car) {
-          const p = game.player;
-          p.car = null;
-          p.x = car.x + 34; p.y = car.y;
-          game.hurtPlayer?.(18);
-        }
-        explodeAt(game, car.x, car.y, 80, 'env');
+function fireOnce(game, id) {
+  const def = WEAPON_DEFS[id];
+  const p = game.player;
+  const a = game.arsenal.ammo[id];
+  if (id === 'grenade') { throwGrenade(game); return; }
+  if (id === 'fists') {
+    game.audio.shot('fists');
+    const d = dirFrom(p.angle);
+    const tx = p.x + d.x * def.range, ty = p.y + d.y * def.range;
+    for (const e of game.enemies) {
+      if (e.state !== 'down' && Math.hypot(e.x - tx, e.y - ty) < 24) game.hurtEnemy(e, def.damage);
+    }
+    for (const ped of game.peds) {
+      if (!ped.down && Math.hypot(ped.x - tx, ped.y - ty) < 22) {
+        ped.down = true; ped.downTimer = 7; game.addHeat(5);
+      }
+    }
+    game.spawnParticles(tx, ty, 3, { color: '#ffffff', speed: 50, life: 0.15, size: 2 });
+    return;
+  }
+  if (!a || a.mag <= 0) { game.audio.dryFire(); return; }
+  a.mag -= 1;
+  const pellets = def.pellets || 1;
+  for (let i = 0; i < pellets; i++) {
+    const spread = pellets > 1 ? (i / (pellets - 1) - 0.5) * 2 * def.spread + (Math.random() - 0.5) * 0.03 : (Math.random() - 0.5) * 0.012;
+    fireProjectile(game, p.x, p.y, p.angle + spread, { speed: def.speed, range: def.range, damage: def.damage, hostile: false });
+  }
+  game.audio.shot(id);
+  game.addHeat(1);
+  game.shake = Math.min(6, game.shake + (id === 'shotgun' ? 2.4 : 0.5));
+}
+
+// Per-tick weapon work: slot keys, the trigger, reload, and everything
+// already in the air. Called only while playing, on foot, and out of shops.
+export function updateWeapons(game, dt, input) {
+  const ars = game.arsenal;
+  ars.fireTimer = Math.max(0, ars.fireTimer - dt);
+  const p = game.player;
+
+  for (let s = 0; s < SLOT_KEYS.length; s++) {
+    if (input.wasPressed(SLOT_KEYS[s])) {
+      const id = BY_SLOT[s + 1];
+      if (id && ars.owned[id] && (id !== 'grenade' || ars.ammo.grenade.mag > 0 || p.weapon === 'grenade')) {
+        p.weapon = id;
       }
     }
   }
-}
 
-export function hurtEnemy(game, e, amount) {
-  if (e.state === 'down') return;
-  e.health -= amount;
-  if (e.health <= 0) {
-    e.state = 'down';
-    e.downT = 999;
-    game.enemiesDown++;
-    game.spawnHitParticles(e.x, e.y);
+  if (input.wasPressed('KeyQ')) {
+    const id = p.weapon;
+    const a = ars.ammo[id];
+    if (a && id !== 'grenade') {
+      const def = WEAPON_DEFS[id];
+      const need = def.mag - a.mag;
+      const take = Math.min(need, a.reserve);
+      if (take > 0) { a.mag += take; a.reserve -= take; game.audio.reload(); }
+    }
   }
-}
 
-export function hurtCrew(game, m, amount) {
-  if (m.state === 'down') return;
-  m.health -= amount;
-  if (m.health <= 0) {
-    m.health = 0;
-    m.state = 'down';
-    m.downT = 7;
+  const id = p.weapon;
+  const def = WEAPON_DEFS[id];
+  if (def) {
+    const trigger = def.semi ? input.wasPressed('KeyJ') : input.isDown('KeyJ');
+    if (trigger && ars.fireTimer <= 0) {
+      fireOnce(game, id);
+      ars.fireTimer = def.rof;
+    }
   }
-}
 
-export function updateProjectiles(game, dt) {
-  const p = game.player;
-  for (let i = game.projectiles.length - 1; i >= 0; i--) {
-    const pr = game.projectiles[i];
-    pr.x += pr.vx * dt;
-    pr.y += pr.vy * dt;
+  // Grenades in flight.
+  for (let i = ars.shells.length - 1; i >= 0; i--) {
+    const s = ars.shells[i];
+    s.x += s.vx * dt; s.y += s.vy * dt;
+    s.vx *= 0.92; s.vy *= 0.92;
+    s.fuse -= dt;
+    if (s.fuse <= 0) {
+      ars.shells.splice(i, 1);
+      explodeAt(game, s.x, s.y, WEAPON_DEFS.grenade.blast, WEAPON_DEFS.grenade.damage);
+    }
+  }
+
+  // Projectiles, stepped so fast rounds cannot tunnel through people.
+  const stepLen = 9;
+  for (let i = ars.projectiles.length - 1; i >= 0; i--) {
+    const pr = ars.projectiles[i];
     pr.life -= dt;
-    let dead = pr.life <= 0 || collideRect(pr.x, pr.y, 2);
-    if (!dead && pr.owner === 'player') {
-      for (const e of game.enemies) {
-        if (e.state === 'down') continue;
-        if (Math.hypot(e.x - pr.x, e.y - pr.y) < 15) { hurtEnemy(game, e, pr.damage); dead = true; break; }
-      }
-      if (!dead) {
-        for (const car of [...game.cars, ...game.policeRef.cars]) {
-          if (car.wrecked) continue;
-          if (Math.hypot(car.x - pr.x, car.y - pr.y) < 26) { damageCar(game, car, pr.damage * 0.4); dead = true; break; }
+    let dead = pr.life <= 0;
+    const steps = Math.max(1, Math.ceil((Math.hypot(pr.vx, pr.vy) * dt) / stepLen));
+    for (let s = 0; s < steps && !dead; s++) {
+      pr.x += (pr.vx * dt) / steps;
+      pr.y += (pr.vy * dt) / steps;
+      if (pr.hostile) {
+        if (!game.player.car && Math.hypot(game.player.x - pr.x, game.player.y - pr.y) < 14) {
+          game.damagePlayer(pr.damage);
+          dead = true;
+          break;
         }
-      }
-      if (!dead) {
-        for (const ped of game.peds) {
-          if (ped.state === 'down') continue;
-          if (Math.hypot(ped.x - pr.x, ped.y - pr.y) < 12) {
-            ped.state = 'down'; ped.downT = 3.5; ped.health -= pr.damage;
-            addHeat(20, game);
-            dead = true; break;
+        for (const m of game.crew) {
+          if (m.state !== 'down' && !m.riding && Math.hypot(m.x - pr.x, m.y - pr.y) < 13) {
+            game.hurtCrew(m, pr.damage);
+            dead = true;
+            break;
           }
         }
+        if (dead) break;
+      } else {
+        let hit = false;
+        for (const e of game.enemies) {
+          if (e.state !== 'down' && Math.hypot(e.x - pr.x, e.y - pr.y) < 15) {
+            game.hurtEnemy(e, pr.damage);
+            hit = true;
+            break;
+          }
+        }
+        if (!hit) {
+          for (const c of game.cars) {
+            if (!c.wrecked && Math.hypot(c.x - pr.x, c.y - pr.y) < 24) {
+              game.damageCar(c, pr.damage, false);
+              hit = true;
+              break;
+            }
+          }
+        }
+        if (!hit) {
+          for (const ped of game.peds) {
+            if (!ped.down && Math.hypot(ped.x - pr.x, ped.y - pr.y) < 12) {
+              ped.down = true; ped.downTimer = 8;
+              game.addHeat(6);
+              hit = true;
+              break;
+            }
+          }
+        }
+        if (hit) { dead = true; break; }
       }
-    }
-    if (!dead && pr.owner === 'enemy') {
-      const target = p.car || p;
-      const rr = p.car ? 27 : 13;
-      if (Math.hypot(target.x - pr.x, target.y - pr.y) < rr) {
-        if (p.car) damageCar(game, p.car, pr.damage * 0.3);
-        else game.hurtPlayer?.(pr.damage);
+      if (game.world.pointInBuilding(pr.x, pr.y, -2)) {
+        game.spawnParticles(pr.x, pr.y, 2, { color: '#ffe9a8', speed: 40, life: 0.15, size: 2 });
         dead = true;
       }
-      if (!dead) {
-        for (const m of game.crew) {
-          if (m.state === 'down' || m.inCar) continue;
-          if (Math.hypot(m.x - pr.x, m.y - pr.y) < 12) { hurtCrew(game, m, pr.damage); dead = true; break; }
-        }
-      }
     }
-    if (!dead && pr.owner === 'crew') {
-      for (const e of game.enemies) {
-        if (e.state === 'down') continue;
-        if (Math.hypot(e.x - pr.x, e.y - pr.y) < 15) { hurtEnemy(game, e, pr.damage); dead = true; break; }
-      }
-    }
-    if (dead) game.projectiles.splice(i, 1);
+    if (dead) ars.projectiles.splice(i, 1);
   }
 }
-
-// --- enemies -----------------------------------------------------------------
-
-export function makeEnemy(x, y, kind) {
-  const ferro = kind === 'ferro';
-  return {
-    x, y, angle: 0,
-    health: ferro ? 85 : 55,
-    maxHealth: ferro ? 85 : 55,
-    state: 'active',
-    downT: 0,
-    kind: ferro ? 'ferro' : 'gunman',
-    fireT: 0.6 + Math.random() * 0.9,
-    burstLeft: 0,
-    burstT: 0,
-    speed: ferro ? 96 : 112,
-  };
-}
-
-export function updateEnemies(game, dt) {
-  const p = game.player;
-  const targetPos = p.car || p;
-  for (const e of game.enemies) {
-    if (e.state === 'down') continue;
-    const dx = targetPos.x - e.x, dy = targetPos.y - e.y;
-    const d = Math.hypot(dx, dy);
-    e.angle = Math.atan2(dx, -dy);
-    if (d > 120) {
-      e.x += Math.sin(e.angle) * e.speed * dt;
-      e.y += -Math.cos(e.angle) * e.speed * dt;
-    } else if (d < 52) {
-      e.x -= Math.sin(e.angle) * e.speed * 0.5 * dt;
-      e.y += Math.cos(e.angle) * e.speed * 0.5 * dt;
-    }
-    // Fire control: range plus a clear line past the buildings.
-    e.fireT -= dt;
-    if (e.burstT > 0) e.burstT -= dt;
-    const canShoot = d < 300 && !lineBlocked(e.x, e.y, targetPos.x, targetPos.y);
-    if (e.kind === 'ferro') {
-      // Ferro fires three-round bursts, then pauses to re-acquire.
-      if (e.burstLeft > 0 && e.burstT <= 0 && canShoot) {
-        e.burstLeft--;
-        e.burstT = 0.11;
-        spawnEnemyShot(game, e, { damage: 7, speed: 700 });
-        game.audio?.shoot?.('pistol');
-      } else if (e.burstLeft <= 0 && e.fireT <= 0 && canShoot) {
-        e.burstLeft = 3;
-        e.burstT = 0;
-        e.fireT = 1.5 + Math.random() * 0.7;
-      }
-    } else if (e.fireT <= 0 && canShoot) {
-      e.fireT = 1.1 + Math.random() * 0.8;
-      spawnEnemyShot(game, e, { damage: 6, speed: 680 });
-      game.audio?.shoot?.('pistol');
-    }
-  }
-}
-
-// --- shops ---------------------------------------------------------------------
-
-export function buyWeaponItem(game, idx) {
-  const item = WEAPON_SHOP_ITEMS[idx];
-  if (!item || game.cash < item.price) return false;
-  const p = game.player;
-  switch (item.key) {
-    case 'pistol':
-      if (game.weaponsOwned.pistol) return false;
-      game.weaponsOwned.pistol = true;
-      game.ammo.pistol = { mag: 12, reserve: 48 };
-      break;
-    case 'smg':
-      if (game.weaponsOwned.smg) return false;
-      game.weaponsOwned.smg = true;
-      game.ammo.smg = { mag: 30, reserve: 90 };
-      break;
-    case 'shotgun':
-      if (game.weaponsOwned.shotgun) return false;
-      game.weaponsOwned.shotgun = true;
-      game.ammo.shotgun = { mag: 6, reserve: 24 };
-      break;
-    case 'grenades':
-      game.ammo.grenade.mag += 3;
-      game.weaponsOwned.grenade = true;
-      break;
-    case 'ammoLight':
-      if (!game.weaponsOwned.pistol && !game.weaponsOwned.smg) return false;
-      game.ammo.pistol.reserve += 48;
-      game.ammo.smg.reserve += 60;
-      break;
-    case 'ammoShells':
-      if (!game.weaponsOwned.shotgun) return false;
-      game.ammo.shotgun.reserve += 18;
-      break;
-    case 'health':
-      if (p.health >= PLAYER.maxHealth) return false;
-      p.health = PLAYER.maxHealth;
-      break;
-    case 'armor':
-      if (p.armor >= PLAYER.maxArmor) return false;
-      p.armor = PLAYER.maxArmor;
-      break;
-    default:
-      return false;
-  }
-  game.cash -= item.price;
-  game.audio?.cashRegister?.();
-  return true;
-}
-
-export function buyGarageItem(game, idx) {
-  const item = GARAGE_ITEMS[idx];
-  if (!item || game.cash < item.price) return false;
-  const car = game.player.car;
-  if (!car) return false;
-  switch (item.key) {
-    case 'engine':
-      if (game.mods.engine) return false;
-      game.mods.engine = true;
-      car.tuned = true;
-      break;
-    case 'plating':
-      if (game.mods.plating) return false;
-      game.mods.plating = true;
-      car.plated = true;
-      break;
-    case 'repair':
-      if (car.damage <= 0 && !car.wrecked) return false;
-      car.damage = 0;
-      car.wrecked = false;
-      break;
-    case 'respray': {
-      const palette = ['#c94f6d', '#e07a3f', '#4f7dc9', '#f2d24b', '#7bf1a8', '#b388ff'];
-      car.color = palette[Math.floor(Math.random() * palette.length)];
-      break;
-    }
-    default:
-      return false;
-  }
-  game.cash -= item.price;
-  game.audio?.cashRegister?.();
-  return true;
-}
-
-export { lineBlocked, PLAYER as _PLAYER, clamp as _clamp };

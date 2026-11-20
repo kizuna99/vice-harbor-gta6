@@ -1,131 +1,81 @@
-// Boot, frame loop and the window.ViceHarbor debug handle.
-// Fixed-timestep simulation at 60 Hz; rendering follows rAF.
+// main.js — boot, the frame loop, and the window.ViceHarbor handle the
+// harbour is known by. The simulation advances in fixed 1/60 steps (several
+// in a slow frame, none in a fast one) and the renderer paints afterwards.
+//
+// ?seed=N fixes the city. ?shot=cover|chase|mission|finale stages that
+// scene instead of running the loop, paints it, and sets __shotReady.
 
-import { initInput, pressed } from './input.js';
-import { game } from './game.js';
-import { render } from './render.js';
-import { parseShotRequest, stageScene } from './shots.js';
-import { police, setWantedLevel } from './police.js';
-import { missions, startJobStep } from './missions.js';
-import { districtAt } from './world.js';
-import { audio } from './audio.js';
+import { STEP } from './config.js';
+import { createGame } from './game.js';
+import { createInput } from './input.js';
+import { createRenderer } from './render.js';
+import { stageShot } from './shots.js';
+
+const params = new URLSearchParams(window.location.search);
+const shotName = params.get('shot');
+const seedParam = Number.parseInt(params.get('seed') ?? '', 10);
+const seed = Number.isInteger(seedParam) ? seedParam : 20261117;
 
 const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
+const status = document.getElementById('status');
+const renderer = createRenderer(canvas);
+const input = createInput(window);
+const game = createGame(seed);
 
 function fitCanvas() {
-  canvas.width = 960;
-  canvas.height = 600;
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
 }
+window.addEventListener('resize', fitCanvas);
 fitCanvas();
 
-game.init(7);
-if (game.hasSave()) game.load();
-
-initInput(canvas);
-
-const shotRequest = parseShotRequest();
-if (shotRequest) {
-  game.startGame(true);
-  stageScene(game, shotRequest);
-}
-
-canvas.addEventListener('pointerdown', (e) => {
-  audio.init();
-  audio.resume();
-  if (game.state !== 'title') return;
-  const rect = canvas.getBoundingClientRect();
-  const mx = ((e.clientX - rect.left) / rect.width) * 960;
-  const my = ((e.clientY - rect.top) / rect.height) * 600;
-  for (const b of game.uiButtons || []) {
-    if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
-      if (b.id === 'play') game.startGame(true);
-      if (b.id === 'continue') game.startGame(false);
-    }
-  }
-});
-window.addEventListener('keydown', (e) => {
-  audio.init();
-  audio.resume();
-  if (game.state === 'title' && (e.code === 'Enter' || e.code === 'Space')) {
-    game.startGame(!game.hasSave());
-    pressed.delete(e.code);
-  } else if (game.state === 'paused' && (e.code === 'KeyP' || e.code === 'Escape')) {
-    game.resume();
-    pressed.delete(e.code);
-  }
-});
-
-let last = performance.now();
-let accumulator = 0;
-const STEP = 1 / 60;
-let fpsFrames = 0;
-let fpsTime = 0;
-
-function frame(now) {
-  requestAnimationFrame(frame);
-  let dt = (now - last) / 1000;
-  last = now;
-  if (dt > 0.25) dt = 0.25;
-  accumulator += dt;
-
-  fpsFrames++;
-  fpsTime += dt;
-  if (fpsTime >= 0.5) {
-    game.fps = Math.round(fpsFrames / fpsTime);
-    fpsFrames = 0;
-    fpsTime = 0;
-  }
-
-  while (accumulator >= STEP) {
-    game.step(STEP);
-    accumulator -= STEP;
-  }
-  render(ctx, game);
-}
-requestAnimationFrame(frame);
-
-// Debug / playtest surface. getState returns plain data only.
+// The public handle. `missions` is a getter on purpose: starting a new game
+// swaps the mission book, and anyone holding the handle must see the live
+// one, never the retired copy.
 window.ViceHarbor = {
-  getState() {
-    const p = game.player;
-    return {
-      cash: game.cash,
-      respect: game.respect,
-      wanted: police.stars,
-      vehicles: game.cars.length,
-      peds: game.peds.length,
-      policeCars: police.cars.length,
-      helicopter: !!police.heli,
-      fps: game.fps,
-      district: districtAt(p.x, p.y).name,
-      jobIndex: missions.jobIndex,
-      stepIndex: missions.stepIndex,
-      jobDone: missions.done,
-      inCar: !!p.car,
-      health: Math.round(p.health),
-      armor: Math.round(p.armor),
-      weapon: p.weapon,
-      weaponsOwned: Object.keys(game.weaponsOwned).filter((k) => game.weaponsOwned[k]),
-      ammo: JSON.parse(JSON.stringify(game.ammo)),
-      mods: { ...game.mods },
-      shop: game.shop,
-      enemies: game.enemies.filter((e) => e.state !== 'down').length,
-      enemiesDown: game.enemiesDown,
-      station: audio.stationName(),
-      race: game.raceState
-        ? { phase: game.raceState.phase, idx: game.raceState.idx, total: game.raceState.race.checkpoints.length, name: game.raceState.race.name }
-        : null,
-      lastRace: game.lastRace ? { ...game.lastRace } : null,
-      crew: game.crew.map((m) => ({ name: m.name, x: Math.round(m.x), y: Math.round(m.y), health: Math.round(m.health), down: m.state === 'down', mode: m.mode })),
-      state: game.state,
-      hour: game.hour,
-    };
-  },
-  startGame() { game.startGame(true); },
-  setWanted(n) { setWantedLevel(n); },
-  startStep() { startJobStep(game); },
-  save() { game.save(); },
   game,
-  missions,
+  getState: () => game.getState(),
+  startGame: () => game.startGame(),
+  continueGame: () => game.continueGame(),
+  setWanted: (n) => game.setWanted(n),
+  get missions() { return game.missions; },
+  startStep: () => game.missions.startStep(game),
+  save: () => game.save(),
 };
+
+// Touch pad: the on-screen buttons feed the same input sets as the keys.
+for (const btn of document.querySelectorAll('[data-key]')) {
+  const code = btn.getAttribute('data-key');
+  const on = (e) => { e.preventDefault(); input.setVirtual(code, true); if (game.state === 'title') game.startGame(); };
+  const off = (e) => { e.preventDefault(); input.setVirtual(code, false); };
+  btn.addEventListener('pointerdown', on);
+  btn.addEventListener('pointerup', off);
+  btn.addEventListener('pointerleave', off);
+}
+
+if (shotName) {
+  stageShot(game, shotName);
+  renderer.draw(game);
+  renderer.draw(game);
+  window.__shotReady = true;
+  if (status) status.textContent = `Vice Harbor scene: ${shotName}`;
+} else {
+  let last = performance.now();
+  let acc = 0;
+  const frame = (now) => {
+    const elapsed = Math.min(0.25, (now - last) / 1000);
+    last = now;
+    acc += elapsed;
+    while (acc >= STEP) {
+      game.update(STEP, input);
+      acc -= STEP;
+    }
+    renderer.draw(game);
+    if (status) {
+      const s = game.getState();
+      status.textContent = `Vice Harbor: ${s.state}, $${s.cash}, wanted ${s.wanted} stars`;
+    }
+    window.requestAnimationFrame(frame);
+  };
+  window.requestAnimationFrame(frame);
+}

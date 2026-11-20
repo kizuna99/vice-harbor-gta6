@@ -1,182 +1,177 @@
-// Port Serena's static layout: avenues, buildings, beach, pier,
-// props and the four stunt ramps. Pure data built once at boot.
+// world.js — Port Serena's static shape: the road grid, the buildings that
+// fill its blocks, the docks apron, the beach and the pier. Everything here
+// is built once from the seed and then only read: collisions, line-of-sight
+// for gunfire, and the renderer all consult the same tables.
 
-import { WORLD, DISTRICTS } from './config.js';
-import { makeRng } from './random.js';
+import { AVENUES, STREETS, WORLD, DISTRICTS, RAMPS } from './config.js';
+import { createRandom, cellNoise } from './random.js';
 
-export const world = {
-  buildings: [],
-  colliders: [],
-  palms: [],
-  lamps: [],
-  props: [],
-  ramps: [],
-  roadsX: [],
-  roadsY: [],
-  beach: null,
-  ocean: null,
-  pier: null,
-  islet: null,
-  spawn: { x: 1250, y: 420 },
-};
+const ROAD_HALF = 34;      // asphalt half-width around each grid line
+const SIDEWALK = 12;       // pavement ring beyond the asphalt
 
-const NAMES = [
-  'Cafe Serena', 'Hotel Palma', 'Bea\'s Kitchen', 'Neon Arcade', 'Marina Books',
-  'Sunset Laundry', 'Pier Nine Diner', 'Harbor Bank', 'Lulu\'s Records',
-  'Dockside Gym', 'Coral Pharmacy', 'Vista Apartments', 'Old Town Hall',
-  'University Library', 'Lecture Hall B', 'Student Union', 'Tide Gallery',
-  'Boardwalk Fries', 'Shell Shop', 'Ferry Office', 'Customs House',
-  'Crane Yard Office', 'Warehouse 4', 'Warehouse 7', 'Cold Storage',
-  'Serena Munitions', 'Serena Customs',
+// Open yards that building generation must keep clear: the docks apron where
+// the crossfire happens, Bea's plaza up north, and the two shop forecourts.
+const CLEARINGS = [
+  { x: 2700, y: 1418, w: 470, h: 230 },   // Port Docks apron
+  { x: 1150, y: 330, w: 210, h: 210 },    // Bea's Corner plaza
+  { x: 520, y: 920, w: 170, h: 170 },     // Munitions forecourt
+  { x: 2120, y: 1320, w: 170, h: 170 },   // Customs forecourt
+  { x: 120, y: 260, w: 170, h: 170 },     // safehouse yard
 ];
+
+function rectsOverlap(a, b, pad = 0) {
+  return a.x - pad < b.x + b.w && a.x + a.w + pad > b.x && a.y - pad < b.y + b.h && a.y + a.h + pad > b.y;
+}
 
 export function districtAt(x, y) {
   for (const d of DISTRICTS) {
     if (x >= d.x && x < d.x + d.w && y >= d.y && y < d.y + d.h) return d;
   }
-  if (y >= 1650) return DISTRICTS[4];
-  return DISTRICTS[0];
+  return DISTRICTS[DISTRICTS.length - 1];
 }
 
-function isOnRoad(x, y, pad) {
-  const half = WORLD.roadWidth / 2 + (pad || 0);
-  for (const rx of world.roadsX) if (Math.abs(x - rx) < half) return true;
-  for (const ry of world.roadsY) if (Math.abs(y - ry) < half) return true;
-  return false;
-}
+export function buildWorld(seed) {
+  const rng = createRandom(seed ^ 0x51ab);
+  const buildings = [];
 
-export function buildWorld() {
-  const rng = makeRng(777);
-  world.buildings.length = 0;
-  world.colliders.length = 0;
-  world.palms.length = 0;
-  world.lamps.length = 0;
-  world.props.length = 0;
-  world.ramps.length = 0;
-
-  world.roadsX = [];
-  world.roadsY = [];
-  for (let x = 200; x < WORLD.width; x += WORLD.roadGap) world.roadsX.push(x);
-  for (let y = 200; y < 1700; y += WORLD.roadGap) world.roadsY.push(y);
-  world.roadsY.push(1560); // Ocean Drive
-
-  world.beach = { x: 0, y: 1650, w: WORLD.width, h: 190 };
-  world.ocean = { x: 0, y: 1840, w: WORLD.width, h: WORLD.height - 1840 };
-  world.pier = { x: 2380, y: 1650, w: 90, h: 420 };
-  world.islet = { x: 620, y: 2050, w: 340, h: 150 };
-
-  // Stunt ramps sit squarely on avenues. The first one is on the
-  // eastbound run at y=600, a short drive east of x=1120.
-  world.ramps.push(
-    { x: 1245, y: 600, w: 84, h: 92 },
-    { x: 2000, y: 200, w: 84, h: 92 },
-    { x: 1000, y: 1400, w: 84, h: 92 },
-    { x: 2800, y: 1000, w: 84, h: 92 },
-  );
-
-  let nameIdx = 0;
-  const block = WORLD.blockSize;
-  for (let bx = 0; bx < WORLD.width - 100; bx += WORLD.roadGap) {
-    for (let by = 0; by < 1500; by += WORLD.roadGap) {
-      const ox = bx + WORLD.roadWidth / 2 + 14;
-      const oy = by + WORLD.roadWidth / 2 + 14;
-      for (let i = 0; i < 2; i++) {
-        for (let j = 0; j < 2; j++) {
-          if (rng() < 0.16) continue;
-          const w = 110 + rng() * 30;
-          const h = 110 + rng() * 30;
-          const x = ox + i * (block / 2) + 6;
-          const y = oy + j * (block / 2) + 6;
-          if (isOnRoad(x + w / 2, y + h / 2, 30)) continue;
-          const d = districtAt(x + w / 2, y + h / 2);
-          const named = rng() < 0.3;
-          const b = {
-            x, y, w, h,
-            hue: Math.floor(rng() * 360),
-            floors: 2 + Math.floor(rng() * 5),
-            seed: Math.floor(rng() * 100000),
-            district: d.id,
-            name: named ? NAMES[nameIdx++ % NAMES.length] : null,
-          };
-          world.buildings.push(b);
-          world.colliders.push({ x, y, w, h });
-        }
+  // Walk each block between neighbouring grid lines and drop one to three
+  // buildings into it, leaving alleys. Blocks that touch a clearing stay
+  // empty so mission spaces read as yards, not mazes.
+  const xs = [-80, ...AVENUES, WORLD.width + 80];
+  const ys = [-80, ...STREETS, WORLD.height + 80];
+  for (let i = 0; i < xs.length - 1; i++) {
+    for (let j = 0; j < ys.length - 1; j++) {
+      const bx = xs[i] + ROAD_HALF + SIDEWALK;
+      const by = ys[j] + ROAD_HALF + SIDEWALK;
+      const bw = xs[i + 1] - xs[i] - (ROAD_HALF + SIDEWALK) * 2;
+      const bh = ys[j + 1] - ys[j] - (ROAD_HALF + SIDEWALK) * 2;
+      if (bw < 120 || bh < 120) continue;
+      if (by > WORLD.beachY - 60) continue; // the shore stays open
+      const block = { x: bx, y: by, w: bw, h: bh };
+      if (CLEARINGS.some((c) => rectsOverlap(block, c, -30))) continue;
+      const district = districtAt(bx + bw / 2, by + bh / 2);
+      const count = rng.int(1, 3);
+      for (let k = 0; k < count; k++) {
+        const w = bw * (count === 1 ? rng.range(0.62, 0.8) : rng.range(0.3, 0.44));
+        const h = bh * rng.range(0.55, 0.82);
+        const x = bx + (count === 1 ? (bw - w) / 2 : (k * bw) / count + rng.range(4, 18));
+        const y = by + rng.range(0, Math.max(1, bh - h));
+        const b = {
+          x, y, w, h,
+          floors: rng.int(2, 9),
+          roof: district.roof[k % district.roof.length],
+          wall: district.wall,
+          seed: rng.int(1, 99999),
+          district: district.name,
+        };
+        if (CLEARINGS.some((c) => rectsOverlap(b, c, 6))) continue;
+        buildings.push(b);
       }
     }
   }
 
-  for (let i = 0; i < 150; i++) {
-    const x = rng() * WORLD.width;
-    const y = 150 + rng() * 1550;
-    if (isOnRoad(x, y, 12)) continue;
-    world.palms.push({ x, y, s: 0.8 + rng() * 0.6, lean: (rng() - 0.5) * 0.4 });
-  }
-  for (const rx of world.roadsX) {
-    for (const ry of world.roadsY) {
-      world.lamps.push({ x: rx + WORLD.roadWidth / 2 + 8, y: ry + WORLD.roadWidth / 2 + 8 });
+  // Palms along the shore and Palm Row; lamps on every corner grid point.
+  const palms = [];
+  for (let x = 60; x < WORLD.width; x += 130) palms.push({ x: x + rng.range(-14, 14), y: WORLD.beachY + 26 + rng.range(-8, 8), s: rng.range(0.8, 1.25) });
+  for (let x = 340; x < 3100; x += 210) palms.push({ x, y: 600 - ROAD_HALF - 22, s: rng.range(0.8, 1.15) });
+  const lamps = [];
+  for (const ax of AVENUES) for (const sy of STREETS) lamps.push({ x: ax + ROAD_HALF + 8, y: sy + ROAD_HALF + 8 });
+
+  return {
+    buildings,
+    palms,
+    lamps,
+    ramps: RAMPS,
+    width: WORLD.width,
+    height: WORLD.height,
+
+    isWater(x, y) {
+      if (y < WORLD.waterY) return false;
+      const p = WORLD.pier;
+      if (x >= p.x && x <= p.x + p.w && y >= p.y && y <= p.y + p.h) return false;
+      return true;
+    },
+    isSand(x, y) {
+      return y >= WORLD.beachY && y < WORLD.waterY;
+    },
+    isRoad(x, y) {
+      for (const ax of AVENUES) if (Math.abs(x - ax) <= ROAD_HALF) return true;
+      for (const sy of STREETS) if (Math.abs(y - sy) <= ROAD_HALF) return true;
+      return false;
+    },
+    rampAt(x, y) {
+      for (const r of RAMPS) if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return r;
+      return null;
+    },
+
+    // Circle vs. every building: returns the position pushed out along the
+    // shallowest axis, or null when the circle is already clear. Water is
+    // solid for anything that is not a boat, and there are no boats.
+    collide(x, y, radius) {
+      let px = x, py = y;
+      px = Math.max(radius, Math.min(WORLD.width - radius, px));
+      const maxY = this.isWater(px, y) ? WORLD.waterY - radius : WORLD.height - radius;
+      py = Math.max(radius, Math.min(maxY, py));
+      for (const b of buildings) {
+        const nx = Math.max(b.x, Math.min(b.x + b.w, px));
+        const ny = Math.max(b.y, Math.min(b.y + b.h, py));
+        const dx = px - nx, dy = py - ny;
+        const d2 = dx * dx + dy * dy;
+        if (d2 >= radius * radius) continue;
+        if (d2 > 0.0001) {
+          const d = Math.sqrt(d2);
+          px = nx + (dx / d) * radius;
+          py = ny + (dy / d) * radius;
+        } else {
+          // Centre inside the rect: leave by the nearest face.
+          const left = px - b.x, right = b.x + b.w - px, top = py - b.y, bot = b.y + b.h - py;
+          const m = Math.min(left, right, top, bot);
+          if (m === left) px = b.x - radius;
+          else if (m === right) px = b.x + b.w + radius;
+          else if (m === top) py = b.y - radius;
+          else py = b.y + b.h + radius;
+        }
+      }
+      return { x: px, y: py };
+    },
+
+    pointInBuilding(x, y, pad = 0) {
+      for (const b of buildings) {
+        if (x >= b.x - pad && x <= b.x + b.w + pad && y >= b.y - pad && y <= b.y + b.h + pad) return b;
+      }
+      return null;
+    },
+
+    // Slab test, segment against every building rect. Gunfire and police
+    // eyesight both stop at walls.
+    lineBlocked(x1, y1, x2, y2) {
+      for (const b of buildings) {
+        if (segmentHitsRect(x1, y1, x2, y2, b)) return true;
+      }
+      return false;
+    },
+
+    textureAt(x, y) {
+      return cellNoise(x >> 5, y >> 5, 7);
+    },
+  };
+}
+
+function segmentHitsRect(x1, y1, x2, y2, r) {
+  const dx = x2 - x1, dy = y2 - y1;
+  let t0 = 0, t1 = 1;
+  const axes = [
+    [-dx, x1 - r.x], [dx, r.x + r.w - x1],
+    [-dy, y1 - r.y], [dy, r.y + r.h - y1],
+  ];
+  for (const [p, q] of axes) {
+    if (Math.abs(p) < 1e-9) {
+      if (q < 0) return false;
+    } else {
+      const t = q / p;
+      if (p < 0) { if (t > t1) return false; if (t > t0) t0 = t; }
+      else { if (t < t0) return false; if (t < t1) t1 = t; }
     }
   }
-  for (let i = 0; i < 36; i++) {
-    const x = 2150 + rng() * 950;
-    const y = 950 + rng() * 620;
-    if (isOnRoad(x, y, 26)) continue;
-    const crate = { x, y, w: 34 + rng() * 26, h: 22 + rng() * 14, hue: Math.floor(rng() * 360) };
-    world.props.push(crate);
-    world.colliders.push({ x: crate.x, y: crate.y, w: crate.w, h: crate.h });
-  }
-  world.colliders.push({ x: world.pier.x - 14, y: world.pier.y, w: 14, h: world.pier.h });
-  world.colliders.push({ x: world.pier.x + world.pier.w, y: world.pier.y, w: 14, h: world.pier.h });
-  return world;
+  return true;
 }
-
-export function collideRect(px, py, r) {
-  for (const c of world.colliders) {
-    if (px + r > c.x && px - r < c.x + c.w && py + r > c.y && py - r < c.y + c.h) return true;
-  }
-  return false;
-}
-
-// Segment vs buildings, sampled — used for gunfire line-of-sight.
-export function lineBlocked(x1, y1, x2, y2) {
-  const d = Math.hypot(x2 - x1, y2 - y1);
-  const steps = Math.max(2, Math.floor(d / 16));
-  for (let i = 1; i < steps; i++) {
-    const t = i / steps;
-    if (collideRect(x1 + (x2 - x1) * t, y1 + (y2 - y1) * t, 3)) return true;
-  }
-  return false;
-}
-
-export function resolveCollision(ent, r) {
-  for (const c of world.colliders) {
-    const nx = Math.max(c.x, Math.min(ent.x, c.x + c.w));
-    const ny = Math.max(c.y, Math.min(ent.y, c.y + c.h));
-    const dx = ent.x - nx;
-    const dy = ent.y - ny;
-    const d2 = dx * dx + dy * dy;
-    if (d2 < r * r) {
-      const d = Math.sqrt(d2) || 0.001;
-      if (d2 === 0) { ent.y = c.y - r - 1; continue; }
-      const push = (r - d) / d;
-      ent.x += dx * push;
-      ent.y += dy * push;
-    }
-  }
-  ent.x = Math.max(r, Math.min(WORLD.width - r, ent.x));
-  ent.y = Math.max(r, Math.min(1836 - r, ent.y));
-}
-
-export function nearestRoadPoint(x, y) {
-  let best = { x, y, d: Infinity };
-  for (const rx of world.roadsX) {
-    const d = Math.abs(x - rx);
-    if (d < best.d) best = { x: rx, y, d };
-  }
-  for (const ry of world.roadsY) {
-    const d = Math.abs(y - ry);
-    if (d < best.d) best = { x, y: ry, d };
-  }
-  return best;
-}
-
-export { isOnRoad };

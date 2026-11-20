@@ -1,43 +1,33 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-    <link rel="icon" href="data:,">
-    <title>Vice Harbor — Port Serena (v2)</title>
-    <style>
-      html, body { margin: 0; padding: 0; height: 100%; background: #0b0e14; overflow: hidden; }
-      body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
-      #stage { position: fixed; inset: 0; display: grid; place-items: center; }
-      canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
-      #touch-ui { position: fixed; inset: auto 0 0 0; display: none; justify-content: space-between; padding: 0 14px 16px; pointer-events: none; z-index: 5; }
-      body.has-touch #touch-ui { display: flex; }
-      .pad { display: grid; grid-template-columns: repeat(3, 52px); grid-template-rows: repeat(2, 52px); gap: 6px; pointer-events: auto; }
-      .acts { display: flex; gap: 8px; align-items: end; pointer-events: auto; }
-      .tbtn { width: 52px; height: 52px; border-radius: 50%; border: 1px solid rgba(255,255,255,.35); background: rgba(16,20,28,.55); color: #fff; font-size: 19px; line-height: 1; display: grid; place-items: center; user-select: none; -webkit-user-select: none; }
-      .tbtn.wide { width: 64px; border-radius: 26px; font-size: 13px; letter-spacing: .04em; }
-      .spacer { width: 52px; height: 52px; }
-    </style>
-  </head>
-  <body>
-    <div id="stage">
-      <canvas id="game" width="960" height="600"></canvas>
-    </div>
-    <div id="touch-ui" aria-hidden="true">
-      <div class="pad">
-        <div class="spacer"></div>
-        <div class="tbtn" id="btn-up">▲</div>
-        <div class="spacer"></div>
-        <div class="tbtn" id="btn-left">◀</div>
-        <div class="tbtn" id="btn-down">▼</div>
-        <div class="tbtn" id="btn-right">▶</div>
-      </div>
-      <div class="acts">
-        <div class="tbtn wide" id="btn-brake">BRAKE</div>
-        <div class="tbtn" id="btn-punch">👊</div>
-        <div class="tbtn" id="btn-act">E</div>
-      </div>
-    </div>
-    <script type="module" src="src/main.js"></script>
-  </body>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230d1520'/%3E%3Ctext x='8' y='12' font-size='10' text-anchor='middle' fill='%23ffd23e'%3EV%3C/text%3E%3C/svg%3E">
+<title>Vice Harbor — Port Serena</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0d1520; }
+  #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+  #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  #pad { position: fixed; right: 10px; bottom: 76px; display: none; gap: 8px; z-index: 5; }
+  #pad button {
+    width: 52px; height: 52px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.4);
+    background: rgba(10,14,22,0.55); color: #e8ecf2; font: bold 15px system-ui, sans-serif;
+  }
+  @media (pointer: coarse) { #pad { display: flex; } }
+</style>
+</head>
+<body>
+<canvas id="game" aria-label="Vice Harbor: a top-down open-world driving and action game set in Port Serena"></canvas>
+<p id="status" role="status" aria-live="polite"></p>
+<div id="pad" aria-hidden="true">
+  <button data-key="KeyW">▲</button>
+  <button data-key="KeyA">◀</button>
+  <button data-key="KeyS">▼</button>
+  <button data-key="KeyD">▶</button>
+  <button data-key="KeyE">E</button>
+  <button data-key="KeyJ">J</button>
+</div>
+<script type="module" src="./src/main.js"></script>
+</body>
 </html>

@@ -1,19 +1,20 @@
-// Dependency-free static server for local playtesting.
-// Serves game/ at http://localhost:8080 with browser-correct MIME
-// types for ES modules and refuses paths that escape game/.
-//
-//   node serve.ts
+// serve.ts — a pocket static server so Vice Harbor can be played locally:
+// `node serve.ts` puts game/ on http://localhost:8080 (or --port N).
+// Standard library only; it answers with the MIME types a browser game
+// needs and refuses to serve anything outside game/.
 
+import { createReadStream, statSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { readFileSync, existsSync, statSync } from 'node:fs';
-import { join, normalize, extname } from 'node:path';
+import { extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const rootDir = fileURLToPath(new URL('.', import.meta.url));
-const gameDir = join(rootDir, 'game');
-const PORT = 8080;
+const root = resolve(fileURLToPath(new URL('./game', import.meta.url)));
+const argv = process.argv.slice(2);
+const portAt = argv.indexOf('--port');
+const asked = portAt === -1 ? 8080 : Number(argv[portAt + 1]);
+const port = Number.isInteger(asked) && asked > 0 && asked < 65536 ? asked : 8080;
 
-const MIME = {
+const TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8',
@@ -22,37 +23,51 @@ const MIME = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon',
   '.woff2': 'font/woff2',
+  '.glb': 'model/gltf-binary',
+  '.gltf': 'model/gltf+json',
+  '.bin': 'application/octet-stream',
+  '.wasm': 'application/wasm',
+  '.wav': 'audio/wav',
+  '.mp3': 'audio/mpeg',
+  '.ogg': 'audio/ogg',
+  '.txt': 'text/plain; charset=utf-8',
 };
 
-const server = createServer((req, res) => {
+createServer((req, res) => {
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  let path: string;
   try {
-    const url = new URL(req.url || '/', `http://localhost:${PORT}`);
-    let pathname = decodeURIComponent(url.pathname);
-    if (pathname === '/') pathname = '/index.html';
-
-    const filePath = normalize(join(gameDir, pathname));
-    if (!filePath.startsWith(gameDir)) {
-      res.writeHead(403, { 'Content-Type': 'text/plain' });
-      res.end('Forbidden');
-      return;
-    }
-    if (!existsSync(filePath) || !statSync(filePath).isFile()) {
-      res.writeHead(404, { 'Content-Type': 'text/plain' });
-      res.end('Not found');
-      return;
-    }
-    const type = MIME[extname(filePath).toLowerCase()] || 'application/octet-stream';
-    res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store' });
-    res.end(readFileSync(filePath));
+    path = decodeURIComponent(url.pathname);
   } catch {
-    res.writeHead(500, { 'Content-Type': 'text/plain' });
-    res.end('Server error');
+    res.writeHead(400).end('bad request');
+    return;
   }
-});
-
-server.listen(PORT, () => {
-  console.log(`Vice Harbor v2 dev server: http://localhost:${PORT}`);
+  if (path.endsWith('/')) path += 'index.html';
+  const file = resolve(join(root, normalize(path)));
+  if (file !== root && !file.startsWith(root + sep)) {
+    res.writeHead(403).end('forbidden');
+    return;
+  }
+  let size: number;
+  try {
+    const st = statSync(file);
+    if (!st.isFile()) throw new Error('directory');
+    size = st.size;
+  } catch {
+    res.writeHead(404).end('not found');
+    return;
+  }
+  res.writeHead(200, {
+    'content-type': TYPES[extname(file).toLowerCase()] ?? 'application/octet-stream',
+    'content-length': size,
+    'cache-control': 'no-store',
+  });
+  createReadStream(file).pipe(res);
+}).listen(port, '127.0.0.1', () => {
+  console.log(`Vice Harbor is on http://localhost:${port}`);
 });

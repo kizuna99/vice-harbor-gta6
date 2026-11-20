@@ -1,129 +1,111 @@
-// Street races: two marked courses, a countdown, eight checkpoints
-// and two rubber-banding rivals. Press J in a car at a start marker.
+// races.js — street racing for people who deliver packages by day. Two
+// standing courses, each an eight-checkpoint loop with two house rivals who
+// rubber-band: they press harder when Rio leads and lift off when he is
+// buried, so the last lap is always a story. A race only starts on a fresh
+// J edge at the marker with Rio already in a car — the input module drains
+// every edge at the end of each tick, so a punch thrown a minute ago in a
+// shop can never light the countdown by accident.
 
-import { makeVehicle } from './entities.js';
-import { resolveCollision } from './world.js';
+import { angleTo, dirFrom } from './random.js';
 
 export const RACES = [
   {
-    id: 'palm',
-    name: 'Palm Row Sprint',
+    id: 'palm', name: 'Palm Row Sprint', prize: 400, respect: 6,
     start: { x: 1400, y: 600 },
     checkpoints: [[2200, 600], [3000, 600], [3000, 1000], [2200, 1000], [2200, 1400], [1400, 1400], [1400, 1000], [1400, 600]],
-    payout: 400,
-    respect: 6,
   },
   {
-    id: 'harbor',
-    name: 'Harbor Lights Run',
-    start: { x: 600, y: 1560 },
-    checkpoints: [[1400, 1560], [2200, 1560], [3000, 1400], [3000, 1000], [2200, 1000], [1400, 1000], [600, 1180], [600, 1560]],
-    payout: 650,
-    respect: 10,
+    id: 'harbor', name: 'Harbor Lights Run', prize: 650, respect: 9,
+    start: { x: 400, y: 2200 },
+    checkpoints: [[1000, 2200], [1600, 2200], [2200, 2200], [2200, 1800], [1600, 1800], [1000, 1800], [400, 1800], [400, 2200]],
   },
 ];
 
-export function raceAt(x, y) {
+export function raceNear(game) {
+  if (!game.player.car) return null;
   for (const r of RACES) {
-    if (Math.hypot(x - r.start.x, y - r.start.y) < 78) return r;
+    if (Math.hypot(game.player.x - r.start.x, game.player.y - r.start.y) < 78) return r;
   }
   return null;
 }
 
-export function startRace(game, race) {
-  const rivals = [];
-  for (let i = 0; i < 2; i++) {
-    const car = makeVehicle(i === 0 ? 1 : 0, race.start.x - 46 - i * 8, race.start.y + (i === 0 ? -26 : 26), Math.PI / 2);
-    car.parked = false;
-    car.driver = true;
-    car.speed = 0;
-    rivals.push({ car, idx: 0, finished: false, finishTime: 0 });
-  }
+export function startRace(game, def) {
+  const rivals = [-46, 46].map((off, i) => ({
+    x: def.start.x + off, y: def.start.y + (i === 0 ? -30 : 30),
+    angle: game.player.car.angle, speed: 0, cp: 0, name: i === 0 ? 'Vex (house car)' : 'Mara (house car)',
+    color: i === 0 ? '#4ecdc4' : '#ef6f6c',
+  }));
   game.raceState = {
-    race,
-    phase: 'count',
-    countT: 2.4,
-    idx: 0,
-    time: 0,
-    rivals,
+    def, phase: 'count', t: 2.6, cpIndex: 0, rivals, elapsed: 0,
   };
-  game.lastRace = null;
-  return game.raceState;
+  game.banner(`${def.name} — ready…`);
 }
 
-export function raceProgressOf(state, isPlayer, rival) {
-  if (isPlayer) return state.idx;
-  return rival.idx;
+function rivalProgress(state, r) {
+  const total = state.def.checkpoints.length;
+  const next = state.def.checkpoints[Math.min(r.cp, total - 1)];
+  const segLeft = Math.hypot(next[0] - r.x, next[1] - r.y);
+  return r.cp + (1 - Math.min(1, segLeft / 800));
 }
 
-export function updateRace(game, dt) {
-  const st = game.raceState;
-  if (!st) return;
-  if (st.phase === 'count') {
-    st.countT -= dt;
-    if (st.countT <= 0) {
-      st.phase = 'go';
-      game.audio?.checkpoint?.();
-    }
+export function updateRaces(game, dt) {
+  const s = game.raceState;
+  if (!s) return;
+  const car = game.player.car;
+  if (s.phase === 'count') {
+    s.t -= dt;
+    if (car) { car.speed *= Math.max(0, 1 - dt * 4); } // held on the line
+    if (s.t <= 0) { s.phase = 'go'; game.banner('GO!'); game.audio.blip(); }
     return;
   }
-  st.time += dt;
-  const cps = st.race.checkpoints;
+  s.elapsed += dt;
+  if (!car) return; // out of the car, the clock runs but the course waits
 
-  // Player progress (only while seated in a car).
-  const pc = game.player.car;
-  if (pc && st.idx < cps.length) {
-    const [cx, cy] = cps[st.idx];
-    if (Math.hypot(pc.x - cx, pc.y - cy) < 88) {
-      st.idx++;
-      game.audio?.checkpoint?.();
-      if (st.idx >= cps.length) finishRace(game);
+  // Player checkpoints.
+  const cp = s.def.checkpoints[s.cpIndex];
+  if (cp && Math.hypot(car.x - cp[0], car.y - cp[1]) < 88) {
+    s.cpIndex += 1;
+    game.audio.blip();
+    if (s.cpIndex >= s.def.checkpoints.length) {
+      finishRace(game);
+      return;
     }
   }
-  if (!game.raceState) return; // finished above
 
-  // Rivals steer checkpoint to checkpoint. Rubber-banding keeps them
-  // honest: trail the player's progress and they hurry, lead it and
-  // they ease off — but never beyond a believable street pace.
-  for (const r of st.rivals) {
-    if (r.finished) continue;
-    const car = r.car;
-    if (r.idx >= cps.length) { r.finished = true; r.finishTime = st.time; continue; }
-    const [cx, cy] = cps[r.idx];
-    const dx = cx - car.x, dy = cy - car.y;
-    const d = Math.hypot(dx, dy);
-    if (d < 74) { r.idx++; continue; }
-    const targetAngle = Math.atan2(dx, -dy);
-    let diff = targetAngle - car.angle;
-    while (diff > Math.PI) diff -= Math.PI * 2;
-    while (diff < -Math.PI) diff += Math.PI * 2;
-    car.angle += Math.max(-2.4 * dt, Math.min(2.4 * dt, diff));
-    let top = 168;
-    if (r.idx < st.idx) top = 198;
-    else if (r.idx > st.idx) top = 148;
-    car.speed += Math.max(-260 * dt, Math.min(240 * dt, top - car.speed));
-    car.x += Math.sin(car.angle) * car.speed * dt;
-    car.y += -Math.cos(car.angle) * car.speed * dt;
-    resolveCollision(car, 20);
+  // Rivals run the same loop, rubber-banded against Rio's progress.
+  const playerProg = s.cpIndex;
+  for (const r of s.rivals) {
+    const target = s.def.checkpoints[Math.min(r.cp, s.def.checkpoints.length - 1)];
+    const want = angleTo(r.x, r.y, target[0], target[1]);
+    let d = want - r.angle;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    r.angle += Math.max(-2.2 * dt, Math.min(2.2 * dt, d));
+    const prog = rivalProgress(s, r);
+    const band = prog < playerProg ? 1.13 : prog > playerProg + 0.5 ? 0.9 : 1;
+    const top = 196 * band;
+    r.speed += Math.max(-200 * dt, Math.min(140 * dt, top - r.speed));
+    const dir = dirFrom(r.angle);
+    r.x += dir.x * r.speed * dt;
+    r.y += dir.y * r.speed * dt;
+    if (Math.hypot(r.x - target[0], r.y - target[1]) < 80) r.cp += 1;
   }
 }
 
 function finishRace(game) {
-  const st = game.raceState;
-  const beaten = st.rivals.filter((r) => r.finished).length;
-  const pos = beaten + 1;
-  const payout = pos === 1 ? st.race.payout : pos === 2 ? Math.floor(st.race.payout * 0.4) : 0;
-  if (payout > 0) game.cash += payout;
-  if (pos === 1) game.respect += st.race.respect;
-  game.lastRace = { race: st.race.name, pos, payout, time: Math.round(st.time * 10) / 10 };
-  game.showBanner?.(`Race finished: P${pos} — +$${payout}`, 4.5);
-  game.audio?.cashRegister?.();
+  const s = game.raceState;
+  const progs = s.rivals.map((r) => rivalProgress(s, r));
+  const total = s.def.checkpoints.length;
+  let pos = 1;
+  for (const pr of progs) if (pr >= total) pos += 1;
+  // Nobody else can have finished: rivals cap below the full loop while
+  // Rio is still running it, so a completed Rio loop is a win or a podium.
+  const payout = pos === 1 ? s.def.prize : pos === 2 ? Math.floor(s.def.prize * 0.4) : Math.floor(s.def.prize * 0.15);
+  game.cash += payout;
+  if (pos === 1) game.respect += s.def.respect;
+  game.lastRace = { name: s.def.name, pos, payout, time: s.elapsed };
+  game.banner(pos === 1 ? `${s.def.name}: FIRST — $${payout}` : `${s.def.name}: P${pos} — $${payout}`);
+  game.audio.cash();
   game.raceState = null;
-  game.save();
-}
-
-export function currentCheckpoint(state) {
-  if (!state || state.phase !== 'go') return null;
-  const cp = state.race.checkpoints[state.idx];
-  return cp ? { x: cp[0], y: cp[1] } : null;
+  game.saveSoon();
 }

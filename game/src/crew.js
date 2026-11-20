@@ -1,141 +1,102 @@
-// Crew: Vex and Mara, recruited at the Old Town safehouse once Rio
-// has the respect for it. They follow on foot, ride along in cars,
-// shoot alongside Rio, can be downed and get revived at his side.
-// C toggles the whole crew between follow and stay.
+// crew.js — Rio's people. Vex, a Palm Row mechanic who shoots like she
+// welds (straight, no wasted motion), and Mara, a marina smuggler who only
+// joins crews that have already proved themselves. Respect opens the door;
+// after that they follow, ride, fight, fall and get back up like anyone
+// worth paying.
 
 import { SAFEHOUSE } from './config.js';
-import { resolveCollision, lineBlocked } from './world.js';
+import { angleTo, dirFrom } from './random.js';
+import { fireProjectile } from './weapons.js';
 
-export const CREW_DEFS = [
-  { name: 'Vex', respect: 30, shirt: '#56b6c2', skin: '#c68642', speed: 238 },
-  { name: 'Mara', respect: 70, shirt: '#b388ff', skin: '#f1c27d', speed: 228 },
+export const ROSTER = [
+  { name: 'Vex', need: 30, hp: 120, damage: 9, color: '#4ecdc4', role: 'Mechanic' },
+  { name: 'Mara', need: 70, hp: 150, damage: 12, color: '#ef6f6c', role: 'Smuggler' },
 ];
 
-export function makeCrewMember(def, x, y) {
-  return {
-    name: def.name,
-    x, y, angle: 0,
-    health: 100,
-    maxHealth: 100,
-    state: 'follow', // follow | stay | down
-    mode: 'follow',
-    inCar: false,
-    fireT: 0.8,
-    downT: 0,
-    reviveT: 0,
-    shirt: def.shirt,
-    skin: def.skin,
-    speed: def.speed,
-    walkCycle: 0,
-  };
-}
-
 export function recruitable(game) {
-  for (const def of CREW_DEFS) {
-    if (game.respect < def.respect) continue;
-    if (game.crew.some((m) => m.name === def.name)) continue;
-    return def;
+  if (game.player.car) return null;
+  if (Math.hypot(game.player.x - SAFEHOUSE.x, game.player.y - SAFEHOUSE.y) > 84) return null;
+  for (const r of ROSTER) {
+    if (game.respect >= r.need && !game.crew.some((m) => m.name === r.name)) return r;
   }
   return null;
 }
 
-export function tryRecruit(game) {
-  const p = game.player;
-  if (p.car) return null;
-  if (Math.hypot(p.x - SAFEHOUSE.x, p.y - SAFEHOUSE.y) > SAFEHOUSE.radius) return null;
-  const def = recruitable(game);
-  if (!def) return null;
-  const member = makeCrewMember(def, p.x + 26, p.y + 10);
+export function recruit(game) {
+  const r = recruitable(game);
+  if (!r) return null;
+  const member = {
+    name: r.name, role: r.role, color: r.color,
+    x: SAFEHOUSE.x + 18, y: SAFEHOUSE.y + 26, angle: 0,
+    hp: r.hp, maxHp: r.hp, damage: r.damage,
+    state: 'follow', riding: false, reviveT: 0, shotT: 1,
+  };
   game.crew.push(member);
-  game.showBanner?.(`${def.name} joins the crew. C toggles follow / stay.`, 4);
-  game.audio?.pickup?.();
-  game.save();
+  game.banner(`${r.name} joins the crew — ${r.role}`);
+  game.audio.blip();
+  game.saveSoon();
   return member;
 }
 
-export function toggleCrewMode(game) {
-  if (!game.crew.length) return;
-  const next = game.crew[0].mode === 'follow' ? 'stay' : 'follow';
-  for (const m of game.crew) {
-    m.mode = next;
-    if (m.state !== 'down') m.state = next;
-  }
-  game.showBanner?.(`Crew: ${next === 'follow' ? 'follow me' : 'hold position'}`, 2);
+export function toggleFollow(game) {
+  const next = game.crew.some((m) => m.state === 'follow') ? 'stay' : 'follow';
+  for (const m of game.crew) if (m.state !== 'down') m.state = next;
+  game.banner(next === 'follow' ? 'Crew: on me' : 'Crew: hold position');
 }
 
 export function updateCrew(game, dt) {
   const p = game.player;
-  game.crew.forEach((m, i) => {
+  for (const m of game.crew) {
     if (m.state === 'down') {
-      m.downT -= dt;
-      // Rio standing close revives; otherwise they crawl back up.
-      const near = Math.hypot(p.x - m.x, p.y - m.y) < 44 && !p.car;
-      m.reviveT = near ? m.reviveT + dt : 0;
-      if (m.reviveT > 1.2 || m.downT <= 0) {
-        m.state = m.mode;
-        m.health = 45;
-        m.reviveT = 0;
+      m.reviveT -= dt;
+      // Rio standing over a fallen friend speeds the recovery up.
+      if (Math.hypot(p.x - m.x, p.y - m.y) < 44) m.reviveT -= dt * 3;
+      if (m.reviveT <= 0) {
+        m.state = 'follow';
+        m.hp = Math.floor(m.maxHp * 0.55);
+        game.banner(`${m.name} is back up`);
       }
-      return;
+      continue;
     }
-
+    // Riding: glued to the car, out of the line of fire.
     if (p.car) {
-      // Ride along: hop in when close, materialise beside the car
-      // when Rio gets out (handled by the else branch next tick).
-      m.inCar = true;
-      m.x = p.car.x;
-      m.y = p.car.y;
-      return;
-    }
-    if (m.inCar) {
-      m.inCar = false;
-      m.x = p.x + 24 + i * 14;
-      m.y = p.y + 8;
+      if (Math.hypot(p.car.x - m.x, p.car.y - m.y) < 64) m.riding = true;
+      if (m.riding) { m.x = p.car.x; m.y = p.car.y; continue; }
+    } else if (m.riding) {
+      m.riding = false;
+      m.x = p.x + 22; m.y = p.y + 10;
     }
 
-    if (m.mode === 'stay') { m.walkCycle = 0; combat(game, m, dt); return; }
-
-    // Formation slot trails Rio, offset per member.
-    const back = 36 + i * 20;
-    const tx = p.x - Math.sin(p.angle) * back + (i === 1 ? 20 : -6);
-    const ty = p.y + Math.cos(p.angle) * back;
-    const dx = tx - m.x, dy = ty - m.y;
-    const d = Math.hypot(dx, dy);
-    if (d > 26) {
-      m.angle = Math.atan2(dx, -dy);
-      const sp = d > 120 ? m.speed : Math.max(90, Math.min(m.speed, d * 3.2));
-      m.x += Math.sin(m.angle) * sp * dt;
-      m.y += -Math.cos(m.angle) * sp * dt;
-      m.walkCycle += dt * 11;
-      resolveCollision(m, 10);
-    } else {
-      m.walkCycle = 0;
-      m.angle = p.angle;
+    if (m.state === 'follow') {
+      // Formation point trails Rio opposite his facing, alternating sides
+      // per member so the crew does not stack into a single file.
+      const idx = game.crew.indexOf(m);
+      const back = dirFrom(p.angle + Math.PI + (idx === 0 ? -0.5 : 0.5));
+      const tx = p.x + back.x * 40, ty = p.y + back.y * 40;
+      const d = Math.hypot(tx - m.x, ty - m.y);
+      if (d > 14) {
+        const want = angleTo(m.x, m.y, tx, ty);
+        m.angle = want;
+        const sp = d > 130 ? 252 : 168;
+        const dir = dirFrom(want);
+        const fixed = game.world.collide(m.x + dir.x * sp * dt, m.y + dir.y * sp * dt, 12);
+        m.x = fixed.x; m.y = fixed.y;
+      }
     }
-    combat(game, m, dt);
-  });
-}
 
-function combat(game, m, dt) {
-  m.fireT -= dt;
-  if (m.fireT > 0 || m.inCar) return;
-  let best = null, bd = 300;
-  for (const e of game.enemies) {
-    if (e.state === 'down') continue;
-    const d = Math.hypot(e.x - m.x, e.y - m.y);
-    if (d < bd && !lineBlocked(m.x, m.y, e.x, e.y)) { best = e; bd = d; }
+    // Fight: nearest visible gunman inside 330px gets a round a second.
+    m.shotT -= dt;
+    let target = null, td = 330;
+    for (const e of game.enemies) {
+      if (e.state === 'down') continue;
+      const d = Math.hypot(e.x - m.x, e.y - m.y);
+      if (d < td && !game.world.lineBlocked(m.x, m.y, e.x, e.y)) { target = e; td = d; }
+    }
+    if (target && m.shotT <= 0 && game.state === 'playing') {
+      m.shotT = 0.95;
+      m.angle = angleTo(m.x, m.y, target.x, target.y);
+      fireProjectile(game, m.x, m.y, m.angle, { speed: 580, range: 380, damage: m.damage, hostile: false });
+      game.audio.shot('pistol');
+    }
   }
-  if (!best) return;
-  m.fireT = 0.55 + Math.random() * 0.3;
-  m.angle = Math.atan2(best.x - m.x, -(best.y - m.y));
-  game.projectiles.push({
-    x: m.x + Math.sin(m.angle) * 13,
-    y: m.y - Math.cos(m.angle) * 13,
-    vx: Math.sin(m.angle) * 720,
-    vy: -Math.cos(m.angle) * 720,
-    life: 0.8,
-    damage: 15,
-    owner: 'crew',
-  });
-  game.audio?.shoot?.('pistol');
 }
