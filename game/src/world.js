@@ -1,16 +1,18 @@
 // Port Serena world definition.
-// Builds the road network, building footprints, beach, pier and props
-// from the district table. Pure data — no rendering happens here.
+// Builds the road network, building footprints, beach, pier, props and
+// the four stunt ramps from the district table. Pure data — the
+// renderer and the collision solver both read from here.
 
 import { WORLD, DISTRICTS } from './config.js';
 import { makeRng, pick } from './random.js';
 
 export const world = {
-  buildings: [],   // {x,y,w,h,hue,name?,district}
+  buildings: [],   // {x,y,w,h,hue,floors,name?,district}
   colliders: [],   // solid AABBs the player and cars respect
   palms: [],
   lamps: [],
   props: [],
+  ramps: [],       // stunt ramps {x,y,w,h,angle} — angle = travel direction
   roadsX: [],      // vertical avenue centre lines
   roadsY: [],      // horizontal street centre lines
   beach: null,
@@ -52,6 +54,7 @@ export function buildWorld() {
   world.palms.length = 0;
   world.lamps.length = 0;
   world.props.length = 0;
+  world.ramps.length = 0;
 
   // Avenue / street centre lines.
   world.roadsX = [];
@@ -111,7 +114,8 @@ export function buildWorld() {
       world.lamps.push({ x: rx + WORLD.roadWidth / 2 + 8, y: ry + WORLD.roadWidth / 2 + 8 });
     }
   }
-  // Dock props: crates and containers in the Port Docks.
+  // Dock props: crates and containers in the Port Docks — this yard is
+  // where the Ferro crew makes its stand in job seven.
   for (let i = 0; i < 36; i++) {
     const x = 2150 + rng() * 950;
     const y = 950 + rng() * 620;
@@ -124,6 +128,15 @@ export function buildWorld() {
   world.colliders.push({ x: world.pier.x - 14, y: world.pier.y, w: 14, h: world.pier.h });
   world.colliders.push({ x: world.pier.x + world.pier.w, y: world.pier.y, w: 14, h: world.pier.h });
 
+  // Stunt ramps. Angle follows the game's heading convention:
+  // forward = (sin a, -cos a), so east is PI/2, west -PI/2, south PI.
+  world.ramps.push(
+    { x: 1470, y: 600,  w: 76, h: 46, angle: Math.PI / 2 },  // Palm Row eastbound
+    { x: 2400, y: 1560, w: 76, h: 46, angle: -Math.PI / 2 }, // Ocean Drive westbound
+    { x: 2000, y: 1240, w: 46, h: 76, angle: Math.PI },      // University Ave southbound
+    { x: 2650, y: 1000, w: 76, h: 46, angle: Math.PI / 2 },  // Docks eastbound
+  );
+
   return world;
 }
 
@@ -131,6 +144,23 @@ export function collideRect(px, py, r) {
   // Returns true when a circle at px,py with radius r hits a solid.
   for (const c of world.colliders) {
     if (px + r > c.x && px - r < c.x + c.w && py + r > c.y && py - r < c.y + c.h) return true;
+  }
+  return false;
+}
+
+export function segmentBlocked(x0, y0, x1, y1) {
+  // Cheap line-of-sight test for gunfire: sample the segment and ask
+  // whether any sample lands inside a solid. Buildings and dock
+  // containers block shots; nothing else does.
+  const d = Math.hypot(x1 - x0, y1 - y0);
+  const steps = Math.max(1, Math.ceil(d / 14));
+  for (let i = 1; i < steps; i++) {
+    const t = i / steps;
+    const x = x0 + (x1 - x0) * t;
+    const y = y0 + (y1 - y0) * t;
+    for (const c of world.colliders) {
+      if (x > c.x && x < c.x + c.w && y > c.y && y < c.y + c.h) return true;
+    }
   }
   return false;
 }

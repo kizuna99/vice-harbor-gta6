@@ -1,13 +1,16 @@
 // Boot + frame loop for Vice Harbor — Port Serena.
 // Fixed-timestep simulation at 60 Hz with an accumulator, render on
-// every animation frame, and a small debug handle for the playtest.
+// every animation frame, and a debug handle for the playtest that
+// exposes the v2 state (shops, arsenal, armor, enemies) alongside
+// the original fields.
 
 import { initInput, pressed } from './input.js';
 import { game } from './game.js';
 import { render } from './render.js';
 import { parseShotRequest, stageScene } from './shots.js';
 import { police, setWantedLevel } from './police.js';
-import { missions } from './missions.js';
+import { missions, startJobStep } from './missions.js';
+import { enemiesStanding } from './weapons.js';
 import { districtAt } from './world.js';
 import { audio } from './audio.js';
 
@@ -104,15 +107,32 @@ window.ViceHarbor = {
       fps: game.fps,
       district: districtAt(p.x, p.y).name,
       jobIndex: missions.jobIndex,
+      stepIndex: missions.stepIndex,
       jobDone: missions.done,
       inCar: !!p.car,
       health: Math.round(p.health),
       state: game.state,
       hour: game.hour,
+      // v2 additions
+      shop: game.shop ? game.shop.type : null,
+      weaponsOwned: Object.keys(game.weaponsOwned).filter((id) => game.weaponsOwned[id]),
+      ammo: game.ammo,
+      armor: Math.round(p.armor),
+      weapon: p.weapon,
+      mods: game.mods,
+      enemies: enemiesStanding(game),
+      enemiesDown: game.enemiesDownTotal,
+      // phase-2 additions
+      race: game.raceState,
+      lastRace: game.lastRace,
+      crew: game.crew.map((m) => ({ name: m.name, state: m.state, inCar: m.inCar })),
+      station: audio.stationName(),
     };
   },
   startGame() { game.startGame(true); },
   setWanted(n) { setWantedLevel(n); },
   save() { game.save(); },
+  startStep() { startJobStep(game); },
+  missions,
   game,
 };

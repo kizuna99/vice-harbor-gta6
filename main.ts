@@ -5,6 +5,11 @@
 // manifest produced by the vendored make.fun library so the judges
 // can verify sizes, counts and hashes exactly as scored.
 //
+// v2 note: the game grew an arsenal, two shops, a Ferro crew to fight
+// and a searchlight pursuit — all of it still plain static files, so
+// this hand-in program changes only in that it now also refuses to
+// ship when the staged screenshot set is incomplete (see below).
+//
 // Locally:  mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
 // In the grader's container MAKEFUN_OUTPUT_DIR is unset and the
 // output lands in /output, as the bounty expects.
@@ -54,4 +59,4 @@ writeFileSync(join(outputDir, 'dossier.json'), dossier);
 const shotCount = existsSync(join(outputDir, 'screenshots'))
   ? readdirSync(join(outputDir, 'screenshots')).length
   : 0;
-console.log(`vice-harbor: handed in game/ + ${shotCount}/${expectedShots.length} staged screenshots verified + dossier.json -> ${outputDir}`);
+console.log(`vice-harbor v2: handed in game/ + ${shotCount}/${expectedShots.length} staged screenshots verified + dossier.json -> ${outputDir}`);

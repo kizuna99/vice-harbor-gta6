@@ -1,6 +1,8 @@
-// Vice Harbor — Port Serena : central tuning table
+// Vice Harbor — Port Serena : central tuning table (v2)
 // Every balance number for the city lives here so the rest of the code
-// can stay focused on behaviour instead of magic constants.
+// can stay focused on behaviour instead of magic constants. The v2 pass
+// adds the arsenal, the two shops, the stunt ramps and the roadblock
+// tuning alongside the original v1 numbers.
 
 export const WORLD = {
   width: 3200,
@@ -40,6 +42,11 @@ export const WANTED = {
   arrestRadius: 46,
   arrestFillPerSec: 0.55,
   arrestDrainPerSec: 0.8,
+  // v2: cruiser roadblocks appear at four stars and up.
+  roadblockFromStar: 4,
+  roadblockCars: 2,
+  roadblockRespawnSec: 7,
+  roadblockAheadPx: 360,
 };
 
 export const CRIME_HEAT = {
@@ -48,11 +55,16 @@ export const CRIME_HEAT = {
   hitPed: 45,
   hitCar: 10,
   recklessSpeed: 2, // per second over threshold near a cop
+  gunshot: 4,       // per shot, only when a unit is close enough to hear
+  blast: 26,        // grenade / cook-off, same witness rule
+  shootCop: 30,
+  downCop: 55,
 };
 
+// Eight jobs now: Bea's original six plus the two v2 heavy jobs.
 export const MISSION_REWARDS = {
-  cash:   [220, 380, 450, 520, 400, 700],
-  respect:[6, 10, 12, 14, 10, 20],
+  cash:   [220, 380, 450, 520, 400, 700, 850, 1000],
+  respect:[6, 10, 12, 14, 10, 20, 24, 30],
 };
 
 export const PLAYER = {
@@ -60,9 +72,42 @@ export const PLAYER = {
   sprintSpeed: 235,
   radius: 11,
   maxHealth: 100,
+  maxArmor: 100,
+  armorSoak: 0.65,       // share of incoming damage the vest eats first
   punchRange: 30,
   punchCooldown: 0.32,
   punchDamage: 34,
+};
+
+// The two shops. Serena Munitions is used on foot; Serena Customs
+// needs Rio sitting in the car he wants worked on.
+export const SHOPS = [
+  { id: 'weapons', name: 'Serena Munitions', short: 'W', x: 600,  y: 1000, needCar: false, radius: 80 },
+  { id: 'garage',  name: 'Serena Customs',   short: 'G', x: 2200, y: 1400, needCar: true,  radius: 88 },
+];
+
+export const WEAPON_SHOP_ITEMS = [
+  { key: 'Digit1', kind: 'weapon',  id: 'pistol',  label: 'Harbor Pistol',      price: 180 },
+  { key: 'Digit2', kind: 'weapon',  id: 'smg',     label: 'Calle SMG',          price: 420 },
+  { key: 'Digit3', kind: 'weapon',  id: 'shotgun', label: 'Dockside Shotgun',   price: 650 },
+  { key: 'Digit4', kind: 'grenade', id: 'grenade', label: 'Grenades ×3',        price: 90 },
+  { key: 'Digit5', kind: 'ammo',    id: 'pistol',  label: 'Pistol rounds +36',  price: 40 },
+  { key: 'Digit6', kind: 'ammo',    id: 'smg',     label: 'SMG rounds +90',     price: 60 },
+  { key: 'Digit7', kind: 'ammo',    id: 'shotgun', label: 'Shells +18',         price: 50 },
+  { key: 'Digit8', kind: 'kevlar',  id: 'armor',   label: 'Kevlar vest (full)', price: 150 },
+];
+
+export const GARAGE_ITEMS = [
+  { key: 'Digit1', kind: 'mod', id: 'engine',  label: 'Engine tune (+13%)', price: 300 },
+  { key: 'Digit2', kind: 'mod', id: 'plating', label: 'Armor plating',      price: 350 },
+  { key: 'Digit3', kind: 'respray', id: 'respray', label: 'Respray + repair', price: 120 },
+];
+
+export const STUNT = {
+  minSpeed: 110,         // px/s needed at the ramp lip to leave the ground
+  gravity: 620,          // px/s^2 pulling airZ back down
+  bonusPeak: 40,         // airZ peak that earns the style bonus
+  bonusCash: 15,
 };
 
 export const SAVE_KEY = 'vice-harbor-save-v3';

@@ -1,13 +1,16 @@
 // Keyboard, mouse and touch input.
 // A single state object the simulation samples each tick; edge-triggered
 // actions are exposed through a small pressed-set that game code drains.
+// v2 adds the number row (weapon slots and shop menus) and Q (reload).
 
 export const keys = Object.create(null);
 export const pressed = new Set();
 
 const ACTION_KEYS = new Set([
   'KeyE', 'KeyF', 'Enter', 'Space', 'KeyJ', 'KeyH', 'KeyN',
-  'KeyR', 'KeyP', 'KeyM', 'Escape',
+  'KeyR', 'KeyP', 'KeyM', 'KeyQ', 'KeyC', 'Escape',
+  'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5',
+  'Digit6', 'Digit7', 'Digit8',
 ]);
 
 let touchSeen = false;

@@ -1,10 +1,11 @@
 // Entities: traffic cars, parked cars, pedestrians and the player.
 // Traffic follows the avenue grid in right-hand lanes, brakes for the
 // car ahead and turns at intersections. Pedestrians wander pavements,
-// flee from danger and fall when struck.
+// flee from danger and fall when struck. Cars carry v2 state too:
+// stunt air time (airZ) and a wrecked flag once they cook off.
 
-import { VEHICLES, PLAYER, WORLD } from './config.js';
-import { range, pick, chance, clamp, angleLerp } from './random.js';
+import { VEHICLES, PLAYER, WORLD, STUNT } from './config.js';
+import { rand, range, pick, chance, clamp, angleLerp } from './random.js';
 import { world, resolveCollision, collideRect } from './world.js';
 
 let nextId = 1;
@@ -22,8 +23,14 @@ export function makeVehicle(modelIdx, x, y, angle, color) {
     parked: false,
     police: !!model.police,
     stolen: false,
-    damage: 0,
+    damage: 0,          // 0..100; at 100 the car cooks off
+    wrecked: false,
+    roadblock: false,   // set on SPD roadblock cruisers
     honkT: 0,
+    airZ: 0,            // stunt height above the road, px
+    airVz: 0,
+    airPeak: 0,
+    smokeT: 0,          // burning-wreck particle timer
     // traffic brain
     laneAxis: null,   // 'x' travelling along a horizontal street, 'y' vertical
     laneLine: 0,      // centre line of current road
@@ -35,10 +42,11 @@ export function makeVehicle(modelIdx, x, y, angle, color) {
 
 export function laneOffsetFor(v) {
   // Right-hand traffic: offset to the right of the direction of travel.
+  void v;
   return 24;
 }
 
-export function spawnTraffic(count, rngPick) {
+export function spawnTraffic(count) {
   const cars = [];
   const spots = [];
   for (const ry of world.roadsY) {
@@ -48,8 +56,8 @@ export function spawnTraffic(count, rngPick) {
     for (let y = 120; y < 1600; y += 260) spots.push({ x: rx, y: y + range(-40, 40), horiz: false });
   }
   for (let i = 0; i < count && spots.length; i++) {
-    const s = spots.splice(Math.floor(Math.random() * spots.length), 1)[0];
-    const mi = Math.floor(Math.random() * 5); // never spawn cruisers as traffic
+    const s = spots.splice(Math.floor(rand() * spots.length), 1)[0];
+    const mi = Math.floor(rand() * 5); // never spawn cruisers as traffic
     const dir = chance(0.5) ? 1 : -1;
     const v = makeVehicle(mi, s.x, s.y, 0);
     if (s.horiz) {
@@ -75,7 +83,7 @@ export function spawnParked(count) {
     const x = range(80, WORLD.width - 80);
     const y = range(80, 1580);
     if (collideRect(x, y, 30)) continue;
-    const mi = Math.floor(Math.random() * 5);
+    const mi = Math.floor(rand() * 5);
     const v = makeVehicle(mi, x, y, pick([0, Math.PI / 2, Math.PI, -Math.PI / 2]));
     v.parked = true; v.driver = false; v.speed = 0;
     cars.push(v);
@@ -114,6 +122,8 @@ export function makePlayer(x, y) {
     x, y, angle: -Math.PI / 2,
     vx: 0, vy: 0,
     health: PLAYER.maxHealth,
+    armor: 0,           // v2: kevlar points, refilled at Serena Munitions
+    weapon: 'fists',    // v2: currently drawn weapon id
     car: null,
     punchT: 0, punchAnim: 0,
     dead: false, busted: false,
@@ -141,7 +151,7 @@ function nearestIntersection(v) {
 }
 
 export function updateTrafficCar(v, dt, allCars, player, events, peds) {
-  if (v.parked || v.police || v === player.car) return;
+  if (v.parked || v.police || v.wrecked || v === player.car) return;
   v.turnCooldown -= dt;
   v.honkT -= dt;
 
@@ -208,13 +218,10 @@ export function updateTrafficCar(v, dt, allCars, player, events, peds) {
     ty = v.y + v.dirSign * 120;
     targetAngle = v.dirSign > 0 ? Math.PI : 0;
   }
-  const steer = Math.atan2(tx - v.x, -(ty - v.y));
-  // Blend heading toward lane direction; lateral correction via position pull.
+  // Blend heading toward lane direction; lateral correction via lane pull.
   v.angle = angleLerp(v.angle, targetAngle, Math.min(1, dt * 3.2));
-  v.x += (tx - v.x) * 0; // lateral handled below by lane pull
   if (v.laneAxis === 'x') v.y += (ty - v.y) * Math.min(1, dt * 2.4);
   else v.x += (tx - v.x) * Math.min(1, dt * 2.4);
-  void steer;
 
   // Speed control.
   const accel = v.model.accel * 0.45;
@@ -226,8 +233,8 @@ export function updateTrafficCar(v, dt, allCars, player, events, peds) {
 
   // Despawn far off-map wanderers back onto the grid.
   if (v.x < 30 || v.x > WORLD.width - 30 || v.y < 30 || v.y > 1640) {
-    const p = { x: clamp(v.x, 60, WORLD.width - 60), y: clamp(v.y, 60, 1600) };
-    v.x = p.x; v.y = p.y;
+    v.x = clamp(v.x, 60, WORLD.width - 60);
+    v.y = clamp(v.y, 60, 1600);
   }
   resolveCollision(v, 20);
 }
@@ -302,16 +309,40 @@ export function updatePlayerOnFoot(player, dt, input) {
   player.punchAnim = Math.max(0, player.punchAnim - dt * 5);
 }
 
-export function updatePlayerCar(car, dt, input) {
+// Integrates stunt air time. Returns the landing peak (px) on the tick
+// the car touches down, otherwise 0.
+export function updateAirborne(car, dt) {
+  if (car.airZ <= 0 && car.airVz <= 0) return 0;
+  car.airVz -= STUNT.gravity * dt;
+  car.airZ += car.airVz * dt;
+  if (car.airZ > car.airPeak) car.airPeak = car.airZ;
+  if (car.airZ <= 0) {
+    car.airZ = 0;
+    car.airVz = 0;
+    const peak = car.airPeak;
+    car.airPeak = 0;
+    return peak;
+  }
+  return 0;
+}
+
+export function updatePlayerCar(car, dt, input, tuneMul) {
   const m = car.model;
+  const tune = tuneMul || 1;
+  if (car.wrecked) {
+    car.speed -= car.speed * 2.2 * dt;
+    car.x += Math.sin(car.angle) * car.speed * dt;
+    car.y += -Math.cos(car.angle) * car.speed * dt;
+    return false;
+  }
   const throttle = input.y < 0 ? 1 : input.y > 0 ? -0.55 : 0;
-  if (throttle > 0) car.speed += m.accel * dt;
+  if (throttle > 0) car.speed += m.accel * tune * dt;
   else if (throttle < 0) car.speed += m.accel * 0.6 * dt * (car.speed > 12 ? -2.2 : 1);
   // Drag + rolling resistance.
   car.speed -= car.speed * 0.55 * dt;
   if (input.brake) car.speed -= Math.sign(car.speed) * 420 * dt;
   if (throttle === 0 && Math.abs(car.speed) < 4) car.speed = 0;
-  car.speed = clamp(car.speed, -m.topSpeed * 0.4, m.topSpeed);
+  car.speed = clamp(car.speed, -m.topSpeed * 0.4, m.topSpeed * tune);
 
   const steerAuthority = clamp(Math.abs(car.speed) / 60, 0, 1) * (car.speed < 0 ? -1 : 1);
   car.angle += input.x * 1.9 * steerAuthority * dt * (1 - Math.abs(car.speed) / (m.topSpeed * 2.6));
@@ -320,10 +351,13 @@ export function updatePlayerCar(car, dt, input) {
   car.x += fx * car.speed * dt;
   car.y += fy * car.speed * dt;
 
+  // While airborne the car sails over the scenery: no collision push.
+  if (car.airZ > 0 || car.airVz > 0) return false;
+
   const beforeX = car.x, beforeY = car.y;
   resolveCollision(car, 22);
   if (Math.hypot(car.x - beforeX, car.y - beforeY) > 6 && Math.abs(car.speed) > 90) {
-    car.damage += 6;
+    car.damage += 6 * (car.plateMul || 1); // Serena Customs plating halves it
     car.speed *= 0.45;
     return true; // hard impact this tick
   }
@@ -333,6 +367,7 @@ export function updatePlayerCar(car, dt, input) {
 export function nearestEnterableCar(player, cars) {
   let best = null, bestD = 52 * 52;
   for (const c of cars) {
+    if (c.wrecked) continue;
     const dx = c.x - player.x, dy = c.y - player.y;
     const d = dx * dx + dy * dy;
     if (d < bestD) { bestD = d; best = c; }

@@ -1,6 +1,8 @@
 // Deterministic seeded random helpers.
-// The city layout and screenshot scenes rely on reproducible rolls,
-// so everything funnels through a single mulberry-style generator.
+// The city layout, the staged screenshot scenes and the procedural
+// ground textures all rely on reproducible rolls, so every random
+// decision in the game funnels through a mulberry-style generator
+// and nothing reaches for Math.random().
 
 export function makeRng(seed) {
   let state = (seed >>> 0) || 1;
@@ -13,7 +15,7 @@ export function makeRng(seed) {
   };
 }
 
-// Module-level default stream used by ambient spawning.
+// Module-level default stream used by ambient spawning and effects.
 let stream = makeRng(20261119);
 
 export function reseed(seed) {
